@@ -35,6 +35,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         layout.showLoading(false);
         layout.showError(err?.message || `Failed to load sample ${sampleName}`);
       }
+    },
+    onUrlSelected: async (url: string) => {
+      try {
+        layout.showLoading(true, `Loading CAD model from ${url}...`);
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch file from "${url}" (HTTP ${response.status})`);
+        }
+        const buffer = await response.arrayBuffer();
+        const fileName = url.split('/').pop()?.split('?')[0] || 'model.step';
+        layout.setLoadedFileName(fileName);
+        await viewer.loadFile(buffer, fileName);
+      } catch (err: any) {
+        layout.showLoading(false);
+        layout.showError(err?.message || `Failed to fetch file from "${url}". Verify the path or URL.`);
+      }
     }
   });
 
@@ -89,15 +105,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     layout.showLoading(isLoading, message);
   });
 
-  // Auto-load default STEP assembly sample on startup
+  // Auto-load CAD model from query param (?step=... or ?file=...) or default assembly
   try {
-    layout.showLoading(true, 'Initializing OpenCascade WASM & loading default CAD model...');
-    const defaultSampleUrl = '/samples/as1_pe_203.stp';
-    const resp = await fetch(defaultSampleUrl);
+    const urlParams = new URLSearchParams(window.location.search);
+    const initialUrl = urlParams.get('step') || urlParams.get('file') || urlParams.get('cad') || '/samples/as1_pe_203.stp';
+    const initialName = initialUrl.split('/').pop()?.split('?')[0] || 'model.step';
+
+    layout.showLoading(true, `Initializing OpenCascade WASM & loading ${initialName}...`);
+    const resp = await fetch(initialUrl);
     if (resp.ok) {
       const buffer = await resp.arrayBuffer();
-      layout.setLoadedFileName('as1_pe_203.stp');
-      await viewer.loadFile(buffer, 'as1_pe_203.stp');
+      layout.setLoadedFileName(initialName);
+      await viewer.loadFile(buffer, initialName);
     } else {
       layout.showLoading(false);
     }

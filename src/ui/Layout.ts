@@ -1,6 +1,7 @@
 export interface LayoutCallbacks {
   onFileSelected: (file: File) => void;
   onSampleSelected: (sampleName: string, sampleUrl: string) => void;
+  onUrlSelected: (url: string) => void;
 }
 
 export class AppLayout {
@@ -49,7 +50,7 @@ export class AppLayout {
             </div>
 
             <div class="header-actions">
-              <input type="file" id="cad-file-input" class="hidden-file-input" accept=".step,.stp,.stl,.obj,.iges,.igs" />
+              <input type="file" id="cad-file-input" class="hidden-file-input" accept=".step,.stp,.STEP,.STP,.stl,.STL,.obj,.OBJ,.iges,.igs,.IGES,.IGS,*" />
               <button id="btn-load-cad" class="btn btn-primary" title="Open local CAD file (.step, .stp, .stl, .obj)">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -58,6 +59,14 @@ export class AppLayout {
                 </svg>
                 <span>Load CAD File</span>
               </button>
+
+              <!-- Direct STEP File URL / Path Input -->
+              <div class="url-input-group">
+                <input type="text" id="cad-url-input" class="cad-url-input" placeholder="Or enter STEP file URL / path..." />
+                <button id="btn-load-url" class="btn btn-secondary btn-sm" title="Load STEP file from URL or path">
+                  <span>Load</span>
+                </button>
+              </div>
 
               <!-- Quick Sample Models Dropdown for immediate testing -->
               <div class="sample-dropdown">
@@ -73,6 +82,20 @@ export class AppLayout {
                     <div class="item-text">
                       <span class="item-title">as1_pe_203.stp</span>
                       <span class="item-desc">Assembly (18 Parts, STEP)</span>
+                    </div>
+                  </button>
+                  <button class="dropdown-item" data-url="/samples/as1-oc-214.stp" data-name="as1-oc-214.stp">
+                    <span class="file-icon">⚙️</span>
+                    <div class="item-text">
+                      <span class="item-title">as1-oc-214.stp</span>
+                      <span class="item-desc">AP214 Assembly (STEP)</span>
+                    </div>
+                  </button>
+                  <button class="dropdown-item" data-url="/samples/dm1-oc-214.stp" data-name="dm1-oc-214.stp">
+                    <span class="file-icon">🔩</span>
+                    <div class="item-text">
+                      <span class="item-title">dm1-oc-214.stp</span>
+                      <span class="item-desc">Machined Part (STEP)</span>
                     </div>
                   </button>
                   <button class="dropdown-item" data-url="/samples/cube.stp" data-name="cube.stp">
@@ -198,6 +221,27 @@ export class AppLayout {
         this.callbacks.onFileSelected(file);
       }
     });
+
+    // STEP File URL / Path Input
+    const urlInput = this.root.querySelector<HTMLInputElement>('#cad-url-input');
+    const loadUrlBtn = this.root.querySelector<HTMLButtonElement>('#btn-load-url');
+    const triggerUrlLoad = () => {
+      const url = urlInput?.value.trim();
+      if (url) {
+        this.callbacks.onUrlSelected(url);
+      }
+    };
+
+    if (loadUrlBtn) {
+      loadUrlBtn.addEventListener('click', triggerUrlLoad);
+    }
+    if (urlInput) {
+      urlInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          triggerUrlLoad();
+        }
+      });
+    }
 
     // Sample Models Dropdown
     const samplesBtn = this.root.querySelector('#btn-samples-menu');

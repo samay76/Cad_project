@@ -452,21 +452,50 @@ export async function loadObjFile(
 }
 
 /**
- * Dispatches file loading based on filename extension
+ * Dispatches file loading based on filename extension and content inspection
  */
 export async function loadCADFile(
   buffer: ArrayBuffer,
   fileName: string
 ): Promise<LoadedCADResult> {
   const lowerName = fileName.toLowerCase();
-  if (lowerName.endsWith('.step') || lowerName.endsWith('.stp') || lowerName.endsWith('.iges') || lowerName.endsWith('.igs')) {
-    return loadStepFile(buffer, fileName);
+
+  // Content inspection: check if file starts with STEP header (ISO-10303-21)
+  let isStepByContent = false;
+  try {
+    const previewLen = Math.min(512, buffer.byteLength);
+    const preview = new TextDecoder('ascii', { fatal: false }).decode(
+      new Uint8Array(buffer.slice(0, previewLen))
+    );
+    if (preview.includes('ISO-10303-21') || preview.includes('HEADER;')) {
+      isStepByContent = true;
+    }
+  } catch {
+    // Ignore decode error
+  }
+
+  if (
+    lowerName.endsWith('.step') ||
+    lowerName.endsWith('.stp') ||
+    lowerName.endsWith('.iges') ||
+    lowerName.endsWith('.igs') ||
+    isStepByContent
+  ) {
+    const effectiveName = (lowerName.endsWith('.step') || lowerName.endsWith('.stp'))
+      ? fileName
+      : `${fileName}.step`;
+    return loadStepFile(buffer, effectiveName);
   } else if (lowerName.endsWith('.stl')) {
     return loadStlFile(buffer, fileName);
   } else if (lowerName.endsWith('.obj')) {
     return loadObjFile(buffer, fileName);
   } else {
-    throw new Error(`Unsupported file extension for "${fileName}". Please select a .step, .stp, .stl, or .obj file.`);
+    // If extension is unknown, attempt STEP parser as primary fallback
+    try {
+      return await loadStepFile(buffer, `${fileName}.step`);
+    } catch {
+      throw new Error(`Unsupported or unrecognized file format for "${fileName}". Please provide a .step, .stp, .stl, or .obj file.`);
+    }
   }
 }
 

@@ -191,6 +191,44 @@ html, body {
   color: var(--text-primary);
 }
 
+.btn-sm {
+  padding: 4px 9px;
+  font-size: 11px;
+}
+
+/* Direct STEP File URL / Path Input */
+.url-input-group {
+  display: flex;
+  align-items: center;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 2px 3px 2px 8px;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.url-input-group:focus-within {
+  border-color: var(--accent-blue);
+  background: #ffffff;
+  box-shadow: 0 0 0 2px var(--accent-light);
+}
+
+.cad-url-input {
+  border: none;
+  background: transparent;
+  outline: none;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--text-primary);
+  width: 220px;
+}
+
+.cad-url-input::placeholder {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 /* Sample Models Dropdown */
 .sample-dropdown {
   position: relative;
