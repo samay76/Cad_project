@@ -1,5 +1,8 @@
 # CAD-Based Cobot Pick-Point Tool (Step 2: Gripper & Grasp Pose)
 
+> 📘 **Looking for full architectural details and handoff documentation?**  
+> See the complete [STEP2_IMPLEMENTATION_AND_HANDOFF.md](file:///home/human/nferent_cad/STEP2_IMPLEMENTATION_AND_HANDOFF.md) for data flow diagrams, coordinate frames, unit conversion rules, and future developer guidelines.
+
 A high-performance browser-based CAD viewer and robotic pick-point tool with full gripper integration and kinematic grasp pose planning, designed for downstream cobot pick-and-place integration.
 
 ![Cobot Pick-Point Gripper Step 2 Screenshot](/home/human/cad-step2-verified.png)
