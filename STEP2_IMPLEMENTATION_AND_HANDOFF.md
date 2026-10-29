@@ -178,13 +178,24 @@ All joints and links maintain complete structural integrity (no detached or floa
   - `robotiq_85_right_finger_tip_joint`: Multiplier $+1.0 \implies +\theta$ (keeps right finger pad parallel).
 - **Zero Detachment**: All 8 moving linkage parts remain physically pinned to each other and to the base at their exact revolute joint origins.
 
-### E. Animated "Test Grasp" Motion Sequence
-The test motion verifies feasibility and clearance:
-1. **Phase 1: Pre-Grasp** ($800\text{ ms}$): Fingers open to $85\text{ mm}$ while moving back along $-Z_{\text{approach}}$ by `preGraspDistance` ($100\text{ mm}$).
-2. **Phase 2: Approach** ($1000\text{ ms}$): Linear interpolation along $+Z_{\text{approach}}$ into target grasp pose.
-3. **Phase 3: Close** ($600\text{ ms}$): Fingers close to target opening width.
-4. **Phase 4: Lift** ($900\text{ ms}$): Retracts back to pre-grasp standoff.
-5. **Phase 5: Restore**: Restores user's editable pose and re-enables gizmos.
+### E. Contact Blocking & Animated Pick & Place Motion Sequence
+The tool prevents the gripper from penetrating the CAD model and executes a full Pick & Place sequence:
+1. **Surface Contact Standoff Resolution**:
+   - `CollisionChecker.resolveApproachStandoff()` checks if the gripper body/palm penetrates into the CAD part.
+   - If penetrating, the gripper is automatically backed off along the approach vector until the body sits on the workpiece boundary.
+2. **Finger Clamping at Contact Width**:
+   - `CollisionChecker.findGraspContactWidth()` uses binary search between $[0, 85\text{ mm}]$ to locate the exact thickness where finger pads contact the CAD part.
+   - Closing the fingers clamps firmly at this contact width, blocking the fingers from passing through the solid.
+3. **8-Phase Pick & Place Execution**:
+   - **`pre-grasp`** ($700\text{ ms}$): Retracts to standoff ($100\text{ mm}$ along $-Z$) and opens fingers to $85\text{ mm}$.
+   - **`approach`** ($900\text{ ms}$): Moves linearly to grasp pose, stopping at contact boundary.
+   - **`close`** ($600\text{ ms}$): Clamps onto the CAD workpiece surface.
+   - **`lift`** ($900\text{ ms}$): **PICKS UP THE CAD MODEL!** The CAD model moves along with the gripper $+80\text{ mm}$ into the air.
+   - **`transfer`** ($800\text{ ms}$): Carries the CAD model horizontally ($+70\text{ mm}$ in $X$) across the workspace.
+   - **`place`** ($700\text{ ms}$): Lowers the CAD model down to the table/ground surface.
+   - **`release`** ($500\text{ ms}$): Fingers open to $85\text{ mm}$, releasing the CAD model safely at the place location.
+   - **`retract`** ($700\text{ ms}$): Gripper lifts alone back to clearance standoff.
+   - **`restore`**: Smoothly returns gripper and CAD model to home editable poses.
 
 ---
 
