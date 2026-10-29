@@ -87,13 +87,15 @@ export class GraspListView {
         const isSelected = g.id === this.selectedGraspId;
         const pos = g.tcpPose.position;
         const coordsStr = `X: ${pos.x.toFixed(1)}, Y: ${pos.y.toFixed(1)}, Z: ${pos.z.toFixed(1)}`;
+        const widthVal = g.measuredGraspWidth !== undefined ? g.measuredGraspWidth : g.openingWidth;
+        const widthBadge = `<span class="grasp-width-badge mono">${widthVal.toFixed(1)}mm</span>`;
 
         return `
           <div class="grasp-item ${isSelected ? 'is-selected' : ''}" data-id="${g.id}">
             <div class="grasp-item-info">
               <div class="grasp-item-title-row">
                 <span class="grasp-name" title="${g.name}">${g.name}</span>
-                <span class="grasp-width-badge mono">${g.openingWidth.toFixed(0)}mm</span>
+                ${widthBadge}
               </div>
               <div class="grasp-coords mono">${coordsStr}</div>
             </div>

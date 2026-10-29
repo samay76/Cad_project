@@ -1718,3 +1718,195 @@ html, body {
   white-space: nowrap;
 }
 
+
+/* ==========================================================================
+   STEP 3 STYLES: PART POSE CONTROL & CONTACT-AWARE GRIP
+   ========================================================================== */
+
+.part-panel-block {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.part-scrollable {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px;
+}
+
+.toolbar-target-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #e2e8f0;
+  padding: 2px;
+  border-radius: 6px;
+}
+
+.tb-btn-target {
+  padding: 3px 8px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  border: none !important;
+  color: var(--text-muted) !important;
+}
+
+.tb-btn-target.active {
+  background: var(--bg-surface) !important;
+  color: var(--primary) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.target-seg {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.lock-checkbox-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  background: #f1f5f9;
+  border-radius: 6px;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox-label input[type="checkbox"] {
+  accent-color: var(--primary);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.part-actions-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* Contact Grip section */
+.contact-grip-section {
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+}
+
+.contact-status-card {
+  background: var(--bg-surface);
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.contact-status-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.contact-status-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.badge-contact-none {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.badge-contact-contact,
+.badge-contact {
+  background: #e0f2fe;
+  color: #0284c7;
+  border: 1px solid #bae6fd;
+}
+
+.badge-contact-collision {
+  background: #fee2e2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+.badge-contact-missed {
+  background: #fef3c7;
+  color: #d97706;
+  border: 1px solid #fde68a;
+}
+
+.badge-contact-too-wide {
+  background: #ffedd5;
+  color: #ea580c;
+  border: 1px solid #fed7aa;
+}
+
+.contact-message-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+.contact-metrics-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px dashed #e2e8f0;
+}
+
+.metric-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.metric-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.metric-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.contact-actions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.contact-params-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+  margin-top: 8px;
+}

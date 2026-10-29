@@ -11,6 +11,7 @@
   "dependencies": {
     "occt-import-js": "^0.0.23",
     "three": "^0.186.1",
+    "three-mesh-bvh": "^0.9.17",
     "urdf-loader": "^0.13.1"
   },
   "devDependencies": {

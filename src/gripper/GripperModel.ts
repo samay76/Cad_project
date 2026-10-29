@@ -24,6 +24,8 @@ export class GripperModel {
 
   private allMeshes: THREE.Mesh[] = [];
   private fingerTipMeshes: THREE.Mesh[] = [];
+  private leftFingerTipMeshes: THREE.Mesh[] = [];
+  private rightFingerTipMeshes: THREE.Mesh[] = [];
   private bodyMeshes: THREE.Mesh[] = [];
   private originalMaterials: Map<THREE.Mesh, THREE.Material | THREE.Material[]> = new Map();
   private collisionMaterial: THREE.MeshStandardMaterial;
@@ -57,12 +59,18 @@ export class GripperModel {
     const rightTip = this.robot.links['robotiq_85_right_finger_tip_link'];
     if (leftTip) {
       leftTip.traverse((c) => {
-        if (c instanceof THREE.Mesh) this.fingerTipMeshes.push(c);
+        if (c instanceof THREE.Mesh) {
+          this.leftFingerTipMeshes.push(c);
+          this.fingerTipMeshes.push(c);
+        }
       });
     }
     if (rightTip) {
       rightTip.traverse((c) => {
-        if (c instanceof THREE.Mesh) this.fingerTipMeshes.push(c);
+        if (c instanceof THREE.Mesh) {
+          this.rightFingerTipMeshes.push(c);
+          this.fingerTipMeshes.push(c);
+        }
       });
     }
 
@@ -170,6 +178,112 @@ export class GripperModel {
   }
 
   /**
+   * Sets finger angles independently for non-symmetric contact stops
+   */
+  public setFingerAngles(leftAngle: number, rightAngle: number) {
+    if (this.robot.joints['robotiq_85_left_knuckle_joint']) {
+      this.robot.setJointValue('robotiq_85_left_knuckle_joint', leftAngle);
+    }
+    if (this.robot.joints['robotiq_85_left_inner_knuckle_joint']) {
+      this.robot.setJointValue('robotiq_85_left_inner_knuckle_joint', leftAngle);
+    }
+    if (this.robot.joints['robotiq_85_left_finger_tip_joint']) {
+      this.robot.setJointValue('robotiq_85_left_finger_tip_joint', -leftAngle);
+    }
+
+    if (this.robot.joints['robotiq_85_right_knuckle_joint']) {
+      this.robot.setJointValue('robotiq_85_right_knuckle_joint', -rightAngle);
+    }
+    if (this.robot.joints['robotiq_85_right_inner_knuckle_joint']) {
+      this.robot.setJointValue('robotiq_85_right_inner_knuckle_joint', -rightAngle);
+    }
+    if (this.robot.joints['robotiq_85_right_finger_tip_joint']) {
+      this.robot.setJointValue('robotiq_85_right_finger_tip_joint', rightAngle);
+    }
+  }
+
+  public getClosingAxis(): THREE.Vector3 {
+    // Fingers move along local X axis in Robotiq 2F-85 URDF
+    return new THREE.Vector3(1, 0, 0);
+  }
+
+  public getApproachAxis(): THREE.Vector3 {
+    // Tool points along local +Z axis
+    return new THREE.Vector3(0, 0, 1);
+  }
+
+  public updateMeshCache() {
+    this.allMeshes = [];
+    this.fingerTipMeshes = [];
+    this.leftFingerTipMeshes = [];
+    this.rightFingerTipMeshes = [];
+    this.bodyMeshes = [];
+
+    this.robot.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        this.allMeshes.push(child);
+        this.originalMaterials.set(child, child.material);
+
+        if (child.material instanceof THREE.MeshStandardMaterial || child.material instanceof THREE.MeshPhongMaterial) {
+          child.material.side = THREE.DoubleSide;
+        }
+      }
+    });
+
+    const leftTip = this.robot.links['robotiq_85_left_finger_tip_link'];
+    const rightTip = this.robot.links['robotiq_85_right_finger_tip_link'];
+    if (leftTip) {
+      leftTip.traverse((c) => {
+        if (c instanceof THREE.Mesh) {
+          this.leftFingerTipMeshes.push(c);
+          this.fingerTipMeshes.push(c);
+        }
+      });
+    }
+    if (rightTip) {
+      rightTip.traverse((c) => {
+        if (c instanceof THREE.Mesh) {
+          this.rightFingerTipMeshes.push(c);
+          this.fingerTipMeshes.push(c);
+        }
+      });
+    }
+
+    this.allMeshes.forEach((m) => {
+      if (!this.fingerTipMeshes.includes(m)) {
+        this.bodyMeshes.push(m);
+      }
+    });
+  }
+
+  public getFingerTipMeshesGrouped(): { left: THREE.Mesh[]; right: THREE.Mesh[] } {
+    if (this.leftFingerTipMeshes.length === 0 || this.rightFingerTipMeshes.length === 0) {
+      this.updateMeshCache();
+    }
+    return {
+      left: this.leftFingerTipMeshes,
+      right: this.rightFingerTipMeshes
+    };
+  }
+
+  /**
+   * Toggles collision highlight on specific penetrating meshes
+   */
+  public highlightMeshes(penetratingMeshes: THREE.Mesh[]) {
+    const hasCol = penetratingMeshes.length > 0;
+    this.isColliding = hasCol;
+
+    for (const mesh of this.allMeshes) {
+      if (penetratingMeshes.includes(mesh)) {
+        mesh.material = this.collisionMaterial;
+      } else {
+        const orig = this.originalMaterials.get(mesh);
+        if (orig) mesh.material = orig;
+      }
+    }
+  }
+
+  /**
    * Toggles collision highlight
    */
   public setCollisionHighlight(colliding: boolean) {
@@ -191,14 +305,17 @@ export class GripperModel {
   }
 
   public getAllMeshes(): THREE.Mesh[] {
+    if (this.allMeshes.length === 0) this.updateMeshCache();
     return this.allMeshes;
   }
 
   public getFingerTipMeshes(): THREE.Mesh[] {
+    if (this.fingerTipMeshes.length === 0) this.updateMeshCache();
     return this.fingerTipMeshes;
   }
 
   public getBodyMeshes(): THREE.Mesh[] {
+    if (this.bodyMeshes.length === 0) this.updateMeshCache();
     return this.bodyMeshes;
   }
 

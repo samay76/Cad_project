@@ -1,11 +1,14 @@
+import * as THREE from 'three';
 import { AppLayout } from './ui/Layout';
 import { Viewer } from './viewer/Viewer';
 import { PartsListView } from './ui/PartsList';
 import { PropertiesPanel } from './ui/PropertiesPanel';
 import { GripperPanel } from './ui/GripperPanel';
+import { PartPanel } from './ui/PartPanel';
 import { GraspListView } from './ui/GraspList';
 import { GripperLoader } from './gripper/GripperLoader';
 import { GraspController } from './gripper/GraspController';
+import { PartController } from './part/PartController';
 import type { SavedGrasp, ClickedPointInfo, GripperState } from './types';
 import './styles.css';
 
@@ -13,14 +16,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   const appElement = document.getElementById('app');
   if (!appElement) throw new Error('App root element #app not found.');
 
-  // Pre-declare component instances to avoid Temporal Dead Zone (TDZ)
+  // Pre-declare component instances
   let viewer: Viewer | null = null;
   let layout: AppLayout | null = null;
   let partsList: PartsListView | null = null;
   let propertiesPanel: PropertiesPanel | null = null;
   let gripperPanel: GripperPanel | null = null;
+  let partPanel: PartPanel | null = null;
   let graspList: GraspListView | null = null;
   let graspController: GraspController | null = null;
+  let partController: PartController | null = null;
 
   // State
   let lastClickedPoint: ClickedPointInfo | null = null;
@@ -61,9 +66,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     layout.setLoadedFileName(fileName);
     await viewer.loadFile(buffer, fileName);
 
-    // Update CAD root in grasp controller for collision checking
+    const modelRoot = viewer.getModelRoot();
+    if (partController) {
+      partController.setCadPartsRoot(modelRoot);
+    }
     if (graspController) {
-      graspController.setCadPartsRoot(viewer.getModelRoot());
+      graspController.setCadPartsRoot(modelRoot);
     }
   };
 
@@ -78,8 +86,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
     graspController.snapToClickedPoint(
-      lastClickedPoint.point,
-      lastClickedPoint.normal
+      lastClickedPoint.worldPoint,
+      lastClickedPoint.worldNormal
     );
   };
 
@@ -94,9 +102,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     const newGrasp: SavedGrasp = {
       id: `grasp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       name: `Grasp Pose ${count}`,
-      tcpPose: state.pose,
+      tcpPose: state.pose, // Expressed as T_part_grasp relative to CAD part frame
       rpy: state.rpy,
       openingWidth: state.openingWidth,
+      measuredGraspWidth: state.measuredGraspWidth,
+      contactPoints: graspController.getContactPointsPart(),
+      standoff: state.standoff,
+      depth: state.depth,
+      approachAxis: { x: 0, y: 0, z: 1 },
+      closingAxis: { x: 1, y: 0, z: 0 },
       preGraspDistance: state.preGraspDistance,
       tcpOffset: state.tcpOffset,
       createdAt: Date.now(),
@@ -116,9 +130,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
     graspController.setNumericPose(grasp.tcpPose.position, grasp.rpy);
-    graspController.setOpeningWidth(grasp.openingWidth);
-    graspController.setTcpOffset(grasp.tcpOffset);
-    graspController.setPreGraspDistance(grasp.preGraspDistance);
+    graspController.setOpeningWidth(
+      grasp.measuredGraspWidth !== undefined ? grasp.measuredGraspWidth : grasp.openingWidth
+    );
+    graspController.setTcpOffset(grasp.tcpOffset ?? 145);
+    graspController.setPreGraspDistance(grasp.preGraspDistance ?? 100);
+    if (grasp.standoff !== undefined) graspController.setStandoff(grasp.standoff);
+    if (grasp.depth !== undefined) graspController.setDepth(grasp.depth);
   };
 
   // Helper to export grasps as JSON
@@ -146,10 +164,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       layout?.showError('Imported file does not contain valid grasp poses.');
       return;
     }
-    // Validate grasps have tcpPose and rpy
-    const valid = imported.filter(
-      (g) => g && g.tcpPose && g.tcpPose.position && g.tcpPose.orientation
-    );
+    const valid = imported
+      .filter((g) => g && g.tcpPose && g.tcpPose.position && g.tcpPose.orientation)
+      .map((g) => ({
+        ...g,
+        standoff: g.standoff ?? 0,
+        depth: g.depth ?? 15,
+        approachAxis: g.approachAxis ?? { x: 0, y: 0, z: 1 },
+        closingAxis: g.closingAxis ?? { x: 1, y: 0, z: 0 },
+        tcpOffset: g.tcpOffset ?? 145,
+        preGraspDistance: g.preGraspDistance ?? 100
+      }));
+
     if (valid.length === 0) {
       layout?.showError('No valid grasp poses found in imported file.');
       return;
@@ -157,7 +183,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     savedGrasps = [...savedGrasps, ...valid];
     saveGraspsToStorage();
     graspList?.setGrasps(savedGrasps);
-    // Restore the first imported grasp
     if (valid[0] && graspController) {
       restoreGrasp(valid[0]);
       graspList?.setSelectedGraspId(valid[0].id);
@@ -214,6 +239,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     onTransformModeToggle: (mode) => {
       graspController?.setTransformMode(mode);
     },
+    onTargetToggle: (target) => {
+      graspController?.setActiveEditTarget(target);
+      layout?.setActiveTarget(target);
+      partPanel?.setActiveTarget(target);
+    },
     onSnapPointClick: () => {
       snapToLastClicked();
     },
@@ -231,10 +261,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 2. Initialize 3D Viewer into viewport container
   viewer = new Viewer(layout.viewportContainer);
 
-  // 3. Initialize CAD Properties Panel in right sidebar
+  // 3. Initialize Part Controller
+  partController = new PartController();
+
+  // 4. Initialize CAD Properties Panel in right sidebar
   propertiesPanel = new PropertiesPanel(layout.propertiesPanelContainer);
 
-  // 4. Initialize Parts List in left sidebar
+  // 5. Initialize Parts List in left sidebar
   partsList = new PartsListView(layout.partsListContainer, {
     onResetView: () => {
       viewer?.resetView();
@@ -253,7 +286,49 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // 5. Initialize Gripper Pose Panel in right sidebar
+  // 6. Initialize Part Pose Panel in right sidebar
+  partPanel = new PartPanel(layout.partPanelContainer, {
+    onNumericPoseChange: (pos, rpy) => {
+      partController?.setNumericPose(pos, rpy);
+      graspController?.evaluateCollisionState();
+    },
+    onStepTranslate: (axis, delta) => {
+      partController?.stepTranslate(axis, delta);
+      graspController?.evaluateCollisionState();
+    },
+    onStepRotate: (axis, delta) => {
+      partController?.stepRotate(axis, delta);
+      graspController?.evaluateCollisionState();
+    },
+    onLockGripperToggle: (locked) => {
+      partController?.setLockGripperToPart(locked);
+    },
+    onResetPartPose: () => {
+      partController?.resetPartPose();
+      graspController?.evaluateCollisionState();
+    },
+    onBakePartOrigin: () => {
+      partController?.bakeCurrentOrientationAsOrigin(
+        () => {
+          // Warning confirmed: saved grasps invalidated
+          savedGrasps = [];
+          saveGraspsToStorage();
+          graspList?.setGrasps(savedGrasps);
+        }
+      );
+    },
+    onTargetToggle: (target) => {
+      graspController?.setActiveEditTarget(target);
+      layout?.setActiveTarget(target);
+      partPanel?.setActiveTarget(target);
+    }
+  });
+
+  partController.setOnStateChange((state) => {
+    partPanel?.setPartState(state);
+  });
+
+  // 7. Initialize Gripper Pose Panel in right sidebar
   gripperPanel = new GripperPanel(layout.gripperPanelContainer, {
     onNumericPoseChange: (pos, rpy) => {
       graspController?.setNumericPose(pos, rpy);
@@ -293,10 +368,35 @@ document.addEventListener('DOMContentLoaded', async () => {
     },
     onSaveGrasp: () => {
       saveCurrentGrasp();
+    },
+    onCloseUntilContact: (tol) => {
+      graspController?.closeUntilContact(tol);
+    },
+    onOpenToClear: () => {
+      graspController?.openToClear();
+    },
+    onAutoPlaceOnOuterWall: () => {
+      const clickPt = lastClickedPoint
+        ? new THREE.Vector3(
+            lastClickedPoint.worldPoint.x,
+            lastClickedPoint.worldPoint.y,
+            lastClickedPoint.worldPoint.z
+          )
+        : undefined;
+      graspController?.autoPlaceOnOuterWall(clickPt);
+    },
+    onStandoffChange: (s) => {
+      graspController?.setStandoff(s);
+    },
+    onDepthChange: (d) => {
+      graspController?.setDepth(d);
+    },
+    onToleranceChange: (t) => {
+      graspController?.setTolerance(t);
     }
   });
 
-  // 6. Initialize Grasps List in left sidebar
+  // 8. Initialize Grasps List in left sidebar
   graspList = new GraspListView(layout.graspListContainer, {
     onRestoreGrasp: (grasp) => {
       restoreGrasp(grasp);
@@ -326,7 +426,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Helper to load gripper model
   const loadGripperModel = async () => {
     if (graspController) {
-      // Gripper is already loaded
       return;
     }
     if (!viewer || !layout) return;
@@ -340,13 +439,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         viewer.getCamera(),
         viewer.getDomElement(),
         viewer.getScene(),
-        viewer.getOrbitControls()
+        viewer.getOrbitControls(),
+        partController || undefined
       );
 
       // Connect CAD root if model is already loaded
       if (viewer.getModelRoot()) {
         graspController.setCadPartsRoot(viewer.getModelRoot());
+        partController?.setCadPartsRoot(viewer.getModelRoot());
       }
+
+      (window as any).__graspController = graspController;
+      (window as any).__viewer = viewer;
+      (window as any).__partController = partController;
 
       // Hook state updates into UI
       graspController.setOnStateChange((state: GripperState) => {
@@ -370,7 +475,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
 
-  // 7. Connect Viewer events to UI
+  // 9. Connect Viewer events to UI
   viewer.setOnModelLoaded((metadata, parts) => {
     layout?.setLoadedFileName(metadata.fileName);
     partsList?.setParts(parts);
@@ -382,8 +487,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       clickedPoint: null
     });
 
+    const modelRoot = viewer?.getModelRoot() ?? null;
+    if (partController) {
+      partController.setCadPartsRoot(modelRoot);
+    }
     if (graspController) {
-      graspController.setCadPartsRoot(viewer?.getModelRoot() ?? null);
+      graspController.setCadPartsRoot(modelRoot);
     }
   });
 
@@ -410,7 +519,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     layout?.showLoading(isLoading, message);
   });
 
-  // 8. Auto-load initial CAD model and Gripper
+  // 10. Auto-load initial CAD model and Gripper
   try {
     const urlParams = new URLSearchParams(window.location.search);
     const initialUrl =
@@ -437,7 +546,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    // Auto-load gripper so it is immediately ready for positioning
+    // Auto-load gripper so it is immediately ready
     await loadGripperModel();
   } catch {
     layout.showLoading(false);

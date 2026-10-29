@@ -1,5 +1,5 @@
 /**
- * Core Types for CAD-based Cobot Pick-Point Viewer
+ * Core Types for CAD-based Cobot Pick-Point Viewer (Steps 1, 2 & 3)
  */
 
 export interface Vector3D {
@@ -78,12 +78,23 @@ export interface EulerAngles {
   yaw: number;   // degrees
 }
 
+export interface ContactPoints {
+  left?: Vector3D;
+  right?: Vector3D;
+}
+
 export interface SavedGrasp {
   id: string;
   name: string;
   tcpPose: Pose; // T_part_grasp: Pose in part coordinate frame (mm + quaternion)
   rpy: EulerAngles; // Roll, Pitch, Yaw in degrees for readability
   openingWidth: number; // mm
+  measuredGraspWidth?: number; // Measured actual contact width (mm)
+  contactPoints?: ContactPoints; // Contact points on each finger in part frame
+  standoff?: number; // mm
+  depth?: number; // mm
+  approachAxis?: Vector3D;
+  closingAxis?: Vector3D;
   preGraspDistance: number; // mm
   tcpOffset: number; // mm
   createdAt: number;
@@ -101,11 +112,20 @@ export type TestPhase =
   | 'release'
   | 'retract';
 
+export type ContactStatusType = 'none' | 'contact' | 'collision' | 'missed' | 'too-wide';
+
 export interface GripperState {
   loaded: boolean;
   visible: boolean;
   openingWidth: number; // mm
+  measuredGraspWidth?: number; // mm
   contactWidth?: number; // detected workpiece grasp thickness in mm
+  contactStatus: ContactStatusType;
+  contactMessage: string;
+  leftFingerContact: boolean;
+  rightFingerContact: boolean;
+  standoff: number; // mm
+  depth: number; // mm
   tcpOffset: number; // mm
   preGraspDistance: number; // mm
   pose: Pose; // T_part_grasp in mm
@@ -113,4 +133,11 @@ export interface GripperState {
   hasCollision: boolean;
   isTesting: boolean;
   testPhase: TestPhase;
+  activeEditTarget: 'part' | 'gripper';
+}
+
+export interface PartPoseState {
+  pose: Pose; // T_world_part
+  rpy: EulerAngles;
+  lockGripperToPart: boolean;
 }

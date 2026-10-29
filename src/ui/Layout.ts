@@ -4,6 +4,7 @@ export interface LayoutCallbacks {
   onUrlSelected: (url: string) => void;
   onLoadGripperClick: () => void;
   onTransformModeToggle: (mode: 'translate' | 'rotate') => void;
+  onTargetToggle?: (target: 'part' | 'gripper') => void;
   onSnapPointClick: () => void;
   onFlipApproachClick: () => void;
   onTestGraspClick: () => void;
@@ -20,6 +21,7 @@ export class AppLayout {
   public graspListContainer!: HTMLElement;
   public viewportContainer!: HTMLElement;
   public gripperPanelContainer!: HTMLElement;
+  public partPanelContainer!: HTMLElement;
   public propertiesPanelContainer!: HTMLElement;
 
   private fileInput!: HTMLInputElement;
@@ -32,6 +34,8 @@ export class AppLayout {
   private errorMessage!: HTMLElement;
 
   // Floating toolbar buttons
+  private btnTbEditGripper!: HTMLButtonElement;
+  private btnTbEditPart!: HTMLButtonElement;
   private btnTbTrans!: HTMLButtonElement;
   private btnTbRot!: HTMLButtonElement;
   private btnTbSnap!: HTMLButtonElement;
@@ -194,8 +198,15 @@ export class AppLayout {
           <section class="viewport-section" id="viewport-container">
             <!-- VIEWPORT FLOATING TOOLBAR -->
             <div class="viewport-toolbar" id="viewport-toolbar">
+              <div class="toolbar-target-group">
+                <button id="tb-btn-edit-gripper" class="tb-btn tb-btn-target active" title="Edit Gripper Pose (G)">Gripper</button>
+                <button id="tb-btn-edit-part" class="tb-btn tb-btn-target" title="Edit CAD Part Pose (P)">Part</button>
+              </div>
+
+              <div class="toolbar-divider"></div>
+
               <div class="toolbar-group">
-                <button id="tb-btn-trans" class="tb-btn active" title="Translate Gripper (T)">
+                <button id="tb-btn-trans" class="tb-btn active" title="Translate (T)">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="5 9 2 12 5 15"/>
                     <polyline points="9 5 12 2 15 5"/>
@@ -206,7 +217,7 @@ export class AppLayout {
                   </svg>
                   <span>Move (T)</span>
                 </button>
-                <button id="tb-btn-rot" class="tb-btn" title="Rotate Gripper (R)">
+                <button id="tb-btn-rot" class="tb-btn" title="Rotate (R)">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
                   </svg>
@@ -283,10 +294,14 @@ export class AppLayout {
           <aside class="sidebar-right" id="right-sidebar-container">
             <div class="right-tab-bar">
               <button class="right-tab-btn active" data-tab="gripper">Gripper & Grasp</button>
+              <button class="right-tab-btn" data-tab="part">Part Pose</button>
               <button class="right-tab-btn" data-tab="cad">CAD Properties</button>
             </div>
             <div class="right-tab-content active" id="tab-gripper-content">
               <div id="gripper-panel-mount"></div>
+            </div>
+            <div class="right-tab-content" id="tab-part-content">
+              <div id="part-panel-mount"></div>
             </div>
             <div class="right-tab-content" id="tab-cad-content">
               <div id="properties-panel-mount"></div>
@@ -311,6 +326,7 @@ export class AppLayout {
     this.graspListContainer = this.root.querySelector('#grasps-list-mount')!;
     this.viewportContainer = this.root.querySelector('#viewport-container')!;
     this.gripperPanelContainer = this.root.querySelector('#gripper-panel-mount')!;
+    this.partPanelContainer = this.root.querySelector('#part-panel-mount')!;
     this.propertiesPanelContainer = this.root.querySelector('#properties-panel-mount')!;
 
     this.fileInput = this.root.querySelector('#cad-file-input')!;
@@ -322,6 +338,8 @@ export class AppLayout {
     this.errorToast = this.root.querySelector('#error-toast')!;
     this.errorMessage = this.root.querySelector('#error-message')!;
 
+    this.btnTbEditGripper = this.root.querySelector('#tb-btn-edit-gripper')!;
+    this.btnTbEditPart = this.root.querySelector('#tb-btn-edit-part')!;
     this.btnTbTrans = this.root.querySelector('#tb-btn-trans')!;
     this.btnTbRot = this.root.querySelector('#tb-btn-rot')!;
     this.btnTbSnap = this.root.querySelector('#tb-btn-snap')!;
@@ -402,6 +420,21 @@ export class AppLayout {
     }
 
     // Viewport Floating Toolbar Events
+    // Edit Target Switcher (Gripper vs Part)
+    this.btnTbEditGripper?.addEventListener('click', () => {
+      this.setActiveTarget('gripper');
+      if (this.callbacks.onTargetToggle) {
+        this.callbacks.onTargetToggle('gripper');
+      }
+    });
+
+    this.btnTbEditPart?.addEventListener('click', () => {
+      this.setActiveTarget('part');
+      if (this.callbacks.onTargetToggle) {
+        this.callbacks.onTargetToggle('part');
+      }
+    });
+
     this.btnTbTrans.addEventListener('click', () => {
       this.setTransformMode('translate');
       this.callbacks.onTransformModeToggle('translate');
@@ -431,6 +464,7 @@ export class AppLayout {
     // Right Sidebar Tab Switcher
     const rightTabBtns = this.root.querySelectorAll<HTMLButtonElement>('.right-tab-btn');
     const tabGripper = this.root.querySelector('#tab-gripper-content');
+    const tabPart = this.root.querySelector('#tab-part-content');
     const tabCad = this.root.querySelector('#tab-cad-content');
 
     rightTabBtns.forEach((btn) => {
@@ -438,12 +472,17 @@ export class AppLayout {
         rightTabBtns.forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
         const tab = btn.dataset.tab;
-        if (tab === 'gripper') {
-          tabGripper?.classList.add('active');
-          tabCad?.classList.remove('active');
-        } else {
-          tabCad?.classList.add('active');
-          tabGripper?.classList.remove('active');
+
+        tabGripper?.classList.toggle('active', tab === 'gripper');
+        tabPart?.classList.toggle('active', tab === 'part');
+        tabCad?.classList.toggle('active', tab === 'cad');
+
+        if (tab === 'part' && this.callbacks.onTargetToggle) {
+          this.setActiveTarget('part');
+          this.callbacks.onTargetToggle('part');
+        } else if (tab === 'gripper' && this.callbacks.onTargetToggle) {
+          this.setActiveTarget('gripper');
+          this.callbacks.onTargetToggle('gripper');
         }
       });
     });
@@ -490,6 +529,32 @@ export class AppLayout {
       closeToastBtn.addEventListener('click', () => {
         this.errorToast.classList.remove('visible');
       });
+    }
+  }
+
+  public setActiveTarget(target: 'part' | 'gripper') {
+    this.btnTbEditGripper?.classList.toggle('active', target === 'gripper');
+    this.btnTbEditPart?.classList.toggle('active', target === 'part');
+
+    // Also update tabs if needed
+    const rightTabBtns = this.root.querySelectorAll<HTMLButtonElement>('.right-tab-btn');
+    const tabGripper = this.root.querySelector('#tab-gripper-content');
+    const tabPart = this.root.querySelector('#tab-part-content');
+
+    rightTabBtns.forEach((btn) => {
+      if (btn.dataset.tab === target) {
+        btn.classList.add('active');
+      } else if (btn.dataset.tab === 'gripper' || btn.dataset.tab === 'part') {
+        btn.classList.remove('active');
+      }
+    });
+
+    if (target === 'gripper') {
+      tabGripper?.classList.add('active');
+      tabPart?.classList.remove('active');
+    } else {
+      tabPart?.classList.add('active');
+      tabGripper?.classList.remove('active');
     }
   }
 

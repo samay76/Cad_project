@@ -14,6 +14,12 @@ export interface GripperPanelEvents {
   onTestGrasp: () => void;
   onStopTest: () => void;
   onSaveGrasp: () => void;
+  onCloseUntilContact: (tolerance: number) => void;
+  onOpenToClear: () => void;
+  onAutoPlaceOnOuterWall: () => void;
+  onStandoffChange: (standoff: number) => void;
+  onDepthChange: (depth: number) => void;
+  onToleranceChange: (tolerance: number) => void;
 }
 
 export class GripperPanel {
@@ -25,6 +31,11 @@ export class GripperPanel {
   // Selected step sizes
   private linearStep = 5; // mm
   private angularStep = 15; // deg
+
+  // Config parameters
+  private standoff = 0; // mm
+  private depth = 15; // mm
+  private tolerance = 0.1; // mm
 
   constructor(container: HTMLElement, events: GripperPanelEvents) {
     this.container = container;
@@ -59,22 +70,81 @@ export class GripperPanel {
         </div>
 
         <div class="gripper-scrollable">
-          <!-- 1. TEST GRASP CONTROLS & STATUS -->
+          <!-- 1. CONTACT GRIP & OUTER WALL DETECTION -->
+          <div class="property-section contact-grip-section">
+            <div class="section-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+              </svg>
+              <span>Contact Grip (No Penetration)</span>
+            </div>
+
+            <!-- Readouts & Feedback -->
+            <div class="contact-status-card">
+              <div class="contact-status-header">
+                <span class="sub-label">Contact Status:</span>
+                <span id="contact-status-text" class="contact-status-badge badge-contact-none">No contact</span>
+              </div>
+              <div id="contact-message-text" class="contact-message-text">Fingers open and ready</div>
+              <div class="contact-metrics-row">
+                <div class="metric-item">
+                  <span class="metric-label">Grasp Width:</span>
+                  <span id="label-measured-width" class="metric-value mono">85.0 mm</span>
+                </div>
+                <div class="metric-item">
+                  <span class="metric-label">Fingers Touched:</span>
+                  <span id="label-fingers-touched" class="metric-value mono">None</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Contact Grip Action Buttons -->
+            <div class="contact-actions-grid">
+              <button id="btn-close-contact" class="btn btn-primary btn-sm" title="Close fingers in 0.5mm steps until outer wall contact, stopping with gap < 0.1mm">
+                Close (until contact)
+              </button>
+              <button id="btn-open-clear" class="btn btn-secondary btn-sm" title="Open fingers fully and verify clear of CAD part">
+                Open to clear
+              </button>
+            </div>
+
+            <button id="btn-auto-place" class="btn btn-secondary btn-sm btn-full" title="Raycast along closing axis to find outer wall hits and center TCP between walls">
+              Auto-place on outer wall
+            </button>
+
+            <!-- Standoff, Depth, Tolerance Inputs -->
+            <div class="contact-params-grid">
+              <div class="num-input-item">
+                <label title="Standoff distance from CAD surface">Standoff (mm)</label>
+                <input type="number" id="inp-standoff" min="0" max="100" step="1" value="0" />
+              </div>
+              <div class="num-input-item">
+                <label title="Grip depth along approach vector">Depth (mm)</label>
+                <input type="number" id="inp-depth" min="0" max="100" step="1" value="15" />
+              </div>
+              <div class="num-input-item">
+                <label title="Contact detection tolerance gap">Tolerance (mm)</label>
+                <input type="number" id="inp-tolerance" min="0.01" max="1.0" step="0.05" value="0.1" />
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. TEST GRASP MOTION & STATUS -->
           <div class="property-section test-section">
             <div class="section-title">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polygon points="5 3 19 12 5 21 5 3"/>
               </svg>
-              <span>Pick & Place Motion</span>
+              <span>Test Grasp Motion</span>
               <span id="test-phase-badge" class="test-phase-badge">Idle</span>
             </div>
 
             <div class="test-buttons-row">
-              <button id="btn-test-grasp" class="btn btn-primary btn-test" title="Run Pick & Place sequence: Approach, Clamp on surface, Lift CAD model, Place and Release">
+              <button id="btn-test-grasp" class="btn btn-primary btn-test" title="Run Pick & Place sequence: Pre-grasp, Approach with collision stop, Contact-aware Close, Lift CAD model, Place and Release">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <polygon points="5 3 19 12 5 21 5 3"/>
                 </svg>
-                <span>Run Pick & Place</span>
+                <span>Test Grasp & Lift</span>
               </button>
               <button id="btn-stop-test" class="btn btn-secondary btn-test" disabled>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -85,7 +155,7 @@ export class GripperPanel {
             </div>
           </div>
 
-          <!-- 2. QUICK ALIGNMENT & SNAPPING -->
+          <!-- 3. QUICK ALIGNMENT & SNAPPING -->
           <div class="property-section">
             <div class="section-title">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -128,7 +198,7 @@ export class GripperPanel {
             </div>
           </div>
 
-          <!-- 3. STEP JOGGING CONTROLS -->
+          <!-- 4. STEP JOGGING CONTROLS -->
           <div class="property-section">
             <div class="section-title">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -195,7 +265,7 @@ export class GripperPanel {
             </div>
           </div>
 
-          <!-- 4. NUMERIC POSE (TWO-WAY BINDING) -->
+          <!-- 5. NUMERIC POSE (TWO-WAY BINDING) -->
           <div class="property-section">
             <div class="section-title">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -238,24 +308,21 @@ export class GripperPanel {
             </button>
           </div>
 
-          <!-- 5. FINGER OPEN / CLOSE & TCP CONFIG -->
+          <!-- 6. FINGER OPEN / CLOSE & TCP CONFIG -->
           <div class="property-section">
             <div class="section-title">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
                 <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
               </svg>
-              <span>Fingers & Dimensions</span>
+              <span>Manual Opening & TCP</span>
             </div>
 
             <!-- Open / Close Slider -->
             <div class="slider-control-group">
               <div class="slider-header">
                 <span class="sub-label">Opening Width:</span>
-                <div class="slider-val-wrap">
-                  <span id="label-contact-block" class="contact-block-badge" style="display:none"></span>
-                  <span id="label-opening-width" class="slider-value mono">85.0 mm</span>
-                </div>
+                <span id="label-opening-width" class="slider-value mono">85.0 mm</span>
               </div>
               <input type="range" id="slider-opening" min="0" max="85" step="0.5" value="85" class="range-slider" />
               <div class="slider-quick-buttons">
@@ -278,7 +345,7 @@ export class GripperPanel {
             </div>
           </div>
 
-          <!-- 6. SAVE GRASP ACTION -->
+          <!-- 7. SAVE GRASP ACTION -->
           <div class="property-section save-section">
             <button id="btn-save-grasp" class="btn btn-primary btn-save-grasp">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -299,15 +366,59 @@ export class GripperPanel {
   private updateValues() {
     if (!this.state) return;
 
-    // Update collision badge
+    // Update collision & contact badges
     const badge = this.container.querySelector('#collision-badge');
     if (badge) {
-      if (this.state.hasCollision) {
+      if (this.state.contactStatus === 'collision' || this.state.hasCollision) {
         badge.className = 'badge-status badge-collision';
         badge.textContent = 'Collision';
+      } else if (this.state.contactStatus === 'contact') {
+        badge.className = 'badge-status badge-contact';
+        badge.textContent = 'Contact';
       } else {
         badge.className = 'badge-status badge-no-collision';
         badge.textContent = 'No collision';
+      }
+    }
+
+    // Contact status card
+    const statusText = this.container.querySelector('#contact-status-text');
+    const messageText = this.container.querySelector('#contact-message-text');
+    const measuredWidthLabel = this.container.querySelector('#label-measured-width');
+    const fingersTouchedLabel = this.container.querySelector('#label-fingers-touched');
+
+    if (statusText) {
+      statusText.className = `contact-status-badge badge-contact-${this.state.contactStatus}`;
+      const statusLabels: Record<string, string> = {
+        none: 'No contact',
+        contact: 'Contact Made',
+        collision: 'Collision',
+        missed: 'Missed',
+        'too-wide': 'Part Too Wide'
+      };
+      statusText.textContent = statusLabels[this.state.contactStatus] || this.state.contactStatus;
+    }
+
+    if (messageText) {
+      messageText.textContent = this.state.contactMessage || 'Ready';
+    }
+
+    if (measuredWidthLabel) {
+      const w = this.state.measuredGraspWidth !== undefined
+        ? this.state.measuredGraspWidth
+        : this.state.openingWidth;
+      measuredWidthLabel.textContent = `${w.toFixed(1)} mm`;
+    }
+
+    if (fingersTouchedLabel) {
+      if (this.state.leftFingerContact && this.state.rightFingerContact) {
+        fingersTouchedLabel.textContent = 'Both (Left & Right)';
+      } else if (this.state.leftFingerContact) {
+        fingersTouchedLabel.textContent = 'Left Finger';
+      } else if (this.state.rightFingerContact) {
+        fingersTouchedLabel.textContent = 'Right Finger';
+      } else {
+        fingersTouchedLabel.textContent = 'None';
       }
     }
 
@@ -318,13 +429,13 @@ export class GripperPanel {
     if (phaseBadge) {
       const phaseLabels: Record<string, string> = {
         idle: 'Idle',
-        'pre-grasp': 'Pre-Grasp (Standoff)',
-        approach: 'Approach (Blocked at Surface)',
-        close: 'Clamp (Contact Boundary)',
-        lift: 'Lift (Model Picked!)',
-        transfer: 'Transfer (Carrying Part)',
-        place: 'Place (Lowering to Table)',
-        release: 'Release (Fingers Open)',
+        'pre-grasp': 'Pre-Grasp (Open)',
+        approach: 'Approach (Detecting Collision)',
+        close: 'Contact-Aware Close',
+        lift: 'Lift (CAD Part Moving!)',
+        transfer: 'Transfer',
+        place: 'Place',
+        release: 'Release',
         retract: 'Retract'
       };
       phaseBadge.textContent = phaseLabels[this.state.testPhase] || this.state.testPhase;
@@ -333,19 +444,10 @@ export class GripperPanel {
     if (testBtn) testBtn.disabled = this.state.isTesting;
     if (stopBtn) stopBtn.disabled = !this.state.isTesting;
 
-    // Update Opening Slider & Contact Block Badge
+    // Update Opening Slider
     const slider = this.container.querySelector<HTMLInputElement>('#slider-opening');
     const widthLabel = this.container.querySelector('#label-opening-width');
-    const contactBlockBadge = this.container.querySelector<HTMLElement>('#label-contact-block');
 
-    if (contactBlockBadge) {
-      if (this.state.contactWidth && this.state.contactWidth > 0) {
-        contactBlockBadge.style.display = 'inline-block';
-        contactBlockBadge.textContent = `Blocked at ${this.state.contactWidth.toFixed(1)}mm`;
-      } else {
-        contactBlockBadge.style.display = 'none';
-      }
-    }
     if (slider && document.activeElement !== slider) {
       slider.value = this.state.openingWidth.toString();
     }
@@ -353,53 +455,107 @@ export class GripperPanel {
       widthLabel.textContent = `${this.state.openingWidth.toFixed(1)} mm`;
     }
 
-    // Update Numeric Inputs (do not overwrite if currently focused by user)
-    const setIfUnfocused = (id: string, val: number) => {
-      const el = this.container.querySelector<HTMLInputElement>(id);
-      if (el && document.activeElement !== el) {
-        el.value = val.toString();
-      }
-    };
+    // Update numeric pose fields
+    const inpX = this.container.querySelector<HTMLInputElement>('#inp-pos-x');
+    const inpY = this.container.querySelector<HTMLInputElement>('#inp-pos-y');
+    const inpZ = this.container.querySelector<HTMLInputElement>('#inp-pos-z');
+    const inpR = this.container.querySelector<HTMLInputElement>('#inp-rpy-r');
+    const inpP = this.container.querySelector<HTMLInputElement>('#inp-rpy-p');
+    const inpYaw = this.container.querySelector<HTMLInputElement>('#inp-rpy-y');
 
-    setIfUnfocused('#inp-pos-x', this.state.pose.position.x);
-    setIfUnfocused('#inp-pos-y', this.state.pose.position.y);
-    setIfUnfocused('#inp-pos-z', this.state.pose.position.z);
-    setIfUnfocused('#inp-rpy-r', this.state.rpy.roll);
-    setIfUnfocused('#inp-rpy-p', this.state.rpy.pitch);
-    setIfUnfocused('#inp-rpy-y', this.state.rpy.yaw);
-    setIfUnfocused('#inp-tcp-offset', this.state.tcpOffset);
-    setIfUnfocused('#inp-pregrasp-dist', this.state.preGraspDistance);
+    if (inpX && document.activeElement !== inpX) inpX.value = this.state.pose.position.x.toFixed(2);
+    if (inpY && document.activeElement !== inpY) inpY.value = this.state.pose.position.y.toFixed(2);
+    if (inpZ && document.activeElement !== inpZ) inpZ.value = this.state.pose.position.z.toFixed(2);
+
+    if (inpR && document.activeElement !== inpR) inpR.value = this.state.rpy.roll.toFixed(1);
+    if (inpP && document.activeElement !== inpP) inpP.value = this.state.rpy.pitch.toFixed(1);
+    if (inpYaw && document.activeElement !== inpYaw) inpYaw.value = this.state.rpy.yaw.toFixed(1);
+
+    // Update parameters
+    const inpOffset = this.container.querySelector<HTMLInputElement>('#inp-tcp-offset');
+    const inpPregrasp = this.container.querySelector<HTMLInputElement>('#inp-pregrasp-dist');
+    const inpStandoff = this.container.querySelector<HTMLInputElement>('#inp-standoff');
+    const inpDepth = this.container.querySelector<HTMLInputElement>('#inp-depth');
+
+    if (inpOffset && document.activeElement !== inpOffset) inpOffset.value = this.state.tcpOffset.toString();
+    if (inpPregrasp && document.activeElement !== inpPregrasp) inpPregrasp.value = this.state.preGraspDistance.toString();
+    if (inpStandoff && document.activeElement !== inpStandoff) inpStandoff.value = this.state.standoff.toString();
+    if (inpDepth && document.activeElement !== inpDepth) inpDepth.value = this.state.depth.toString();
   }
 
   private bindEvents() {
-    // Snap & Flip
+    // Contact Grip actions
+    this.container.querySelector('#btn-close-contact')?.addEventListener('click', () => {
+      this.events.onCloseUntilContact(this.tolerance);
+    });
+
+    this.container.querySelector('#btn-open-clear')?.addEventListener('click', () => {
+      this.events.onOpenToClear();
+    });
+
+    this.container.querySelector('#btn-auto-place')?.addEventListener('click', () => {
+      this.events.onAutoPlaceOnOuterWall();
+    });
+
+    // Contact parameters
+    const inpStandoff = this.container.querySelector<HTMLInputElement>('#inp-standoff');
+    inpStandoff?.addEventListener('change', (e) => {
+      this.standoff = parseFloat((e.target as HTMLInputElement).value) || 0;
+      this.events.onStandoffChange(this.standoff);
+    });
+
+    const inpDepth = this.container.querySelector<HTMLInputElement>('#inp-depth');
+    inpDepth?.addEventListener('change', (e) => {
+      this.depth = parseFloat((e.target as HTMLInputElement).value) || 15;
+      this.events.onDepthChange(this.depth);
+    });
+
+    const inpTol = this.container.querySelector<HTMLInputElement>('#inp-tolerance');
+    inpTol?.addEventListener('change', (e) => {
+      this.tolerance = parseFloat((e.target as HTMLInputElement).value) || 0.1;
+      this.events.onToleranceChange(this.tolerance);
+    });
+
+    // Test Grasp
+    this.container.querySelector('#btn-test-grasp')?.addEventListener('click', () => {
+      this.events.onTestGrasp();
+    });
+
+    this.container.querySelector('#btn-stop-test')?.addEventListener('click', () => {
+      this.events.onStopTest();
+    });
+
+    // Alignment & Snapping
     this.container.querySelector('#btn-snap-point')?.addEventListener('click', () => {
       this.events.onSnapToClickedPoint();
     });
+
     this.container.querySelector('#btn-flip-approach')?.addEventListener('click', () => {
       this.events.onFlipApproach();
     });
 
-    // Spin around approach
-    this.container.querySelectorAll<HTMLButtonElement>('[data-spin]').forEach((btn) => {
+    const spinBtns = this.container.querySelectorAll<HTMLButtonElement>('.spin-buttons button');
+    spinBtns.forEach((btn) => {
       btn.addEventListener('click', () => {
         const deg = parseFloat(btn.dataset.spin || '0');
-        if (deg !== 0) this.events.onRotateApproach(deg);
+        this.events.onRotateApproach(deg);
       });
     });
 
-    // Step size selector
-    this.container.querySelectorAll<HTMLButtonElement>('.step-btn').forEach((btn) => {
+    // Step size buttons
+    const stepBtns = this.container.querySelectorAll<HTMLButtonElement>('.step-btn');
+    stepBtns.forEach((btn) => {
       btn.addEventListener('click', () => {
-        this.container.querySelectorAll('.step-btn').forEach((b) => b.classList.remove('active'));
+        stepBtns.forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
         this.linearStep = parseFloat(btn.dataset.linear || '5');
         this.angularStep = parseFloat(btn.dataset.angular || '15');
       });
     });
 
-    // Jog Translation
-    this.container.querySelectorAll<HTMLButtonElement>('.btn-jog').forEach((btn) => {
+    // Translation Jog buttons
+    const jogBtns = this.container.querySelectorAll<HTMLButtonElement>('.btn-jog');
+    jogBtns.forEach((btn) => {
       btn.addEventListener('click', () => {
         const axis = btn.dataset.axis as 'x' | 'y' | 'z';
         const dir = parseFloat(btn.dataset.dir || '1');
@@ -407,8 +563,9 @@ export class GripperPanel {
       });
     });
 
-    // Jog Rotation
-    this.container.querySelectorAll<HTMLButtonElement>('.btn-rot').forEach((btn) => {
+    // Rotation Jog buttons
+    const rotBtns = this.container.querySelectorAll<HTMLButtonElement>('.btn-rot');
+    rotBtns.forEach((btn) => {
       btn.addEventListener('click', () => {
         const axis = btn.dataset.axis as 'x' | 'y' | 'z';
         const dir = parseFloat(btn.dataset.dir || '1');
@@ -416,50 +573,54 @@ export class GripperPanel {
       });
     });
 
-    // Numeric inputs two-way binding
-    const handleNumericSubmit = () => {
-      const x = parseFloat((this.container.querySelector('#inp-pos-x') as HTMLInputElement).value) || 0;
-      const y = parseFloat((this.container.querySelector('#inp-pos-y') as HTMLInputElement).value) || 0;
-      const z = parseFloat((this.container.querySelector('#inp-pos-z') as HTMLInputElement).value) || 0;
-      const roll = parseFloat((this.container.querySelector('#inp-rpy-r') as HTMLInputElement).value) || 0;
-      const pitch = parseFloat((this.container.querySelector('#inp-rpy-p') as HTMLInputElement).value) || 0;
-      const yaw = parseFloat((this.container.querySelector('#inp-rpy-y') as HTMLInputElement).value) || 0;
+    // Numeric TCP Pose
+    const handleNumeric = () => {
+      const inpX = this.container.querySelector<HTMLInputElement>('#inp-pos-x');
+      const inpY = this.container.querySelector<HTMLInputElement>('#inp-pos-y');
+      const inpZ = this.container.querySelector<HTMLInputElement>('#inp-pos-z');
+      const inpR = this.container.querySelector<HTMLInputElement>('#inp-rpy-r');
+      const inpP = this.container.querySelector<HTMLInputElement>('#inp-rpy-p');
+      const inpYaw = this.container.querySelector<HTMLInputElement>('#inp-rpy-y');
 
-      this.events.onNumericPoseChange({ x, y, z }, { roll, pitch, yaw });
+      if (!inpX || !inpY || !inpZ || !inpR || !inpP || !inpYaw) return;
+
+      const pos = {
+        x: parseFloat(inpX.value) || 0,
+        y: parseFloat(inpY.value) || 0,
+        z: parseFloat(inpZ.value) || 0
+      };
+
+      const rpy = {
+        roll: parseFloat(inpR.value) || 0,
+        pitch: parseFloat(inpP.value) || 0,
+        yaw: parseFloat(inpYaw.value) || 0
+      };
+
+      this.events.onNumericPoseChange(pos, rpy);
     };
 
-    const numInputIds = [
-      '#inp-pos-x',
-      '#inp-pos-y',
-      '#inp-pos-z',
-      '#inp-rpy-r',
-      '#inp-rpy-p',
-      '#inp-rpy-y'
-    ];
-    numInputIds.forEach((id) => {
-      const el = this.container.querySelector<HTMLInputElement>(id);
-      if (el) {
-        el.addEventListener('change', handleNumericSubmit);
-        el.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') handleNumericSubmit();
+    ['#inp-pos-x', '#inp-pos-y', '#inp-pos-z', '#inp-rpy-r', '#inp-rpy-p', '#inp-rpy-y'].forEach(
+      (sel) => {
+        const input = this.container.querySelector<HTMLInputElement>(sel);
+        input?.addEventListener('change', handleNumeric);
+        input?.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') handleNumeric();
         });
       }
-    });
+    );
 
-    // Reset Pose
     this.container.querySelector('#btn-reset-pose')?.addEventListener('click', () => {
       this.events.onResetPose();
     });
 
-    // Opening width slider & quick buttons
+    // Opening width slider
     const slider = this.container.querySelector<HTMLInputElement>('#slider-opening');
-    if (slider) {
-      slider.addEventListener('input', () => {
-        const val = parseFloat(slider.value);
-        this.events.onOpeningChange(val);
-      });
-    }
+    slider?.addEventListener('input', (e) => {
+      const val = parseFloat((e.target as HTMLInputElement).value);
+      this.events.onOpeningChange(val);
+    });
 
+    // Quick presets for opening
     this.container.querySelector('#btn-quick-close')?.addEventListener('click', () => {
       this.events.onOpeningChange(0);
     });
@@ -470,28 +631,20 @@ export class GripperPanel {
       this.events.onOpeningChange(85);
     });
 
-    // TCP Offset & Pre-Grasp inputs
-    const tcpOffsetInp = this.container.querySelector<HTMLInputElement>('#inp-tcp-offset');
-    tcpOffsetInp?.addEventListener('change', () => {
-      const val = parseFloat(tcpOffsetInp.value) || 145;
-      this.events.onTcpOffsetChange(val);
+    // TCP Offset & Pre-Grasp Distance
+    const inpOffset = this.container.querySelector<HTMLInputElement>('#inp-tcp-offset');
+    inpOffset?.addEventListener('change', (e) => {
+      const val = parseFloat((e.target as HTMLInputElement).value);
+      if (!isNaN(val)) this.events.onTcpOffsetChange(val);
     });
 
-    const preGraspInp = this.container.querySelector<HTMLInputElement>('#inp-pregrasp-dist');
-    preGraspInp?.addEventListener('change', () => {
-      const val = parseFloat(preGraspInp.value) || 100;
-      this.events.onPreGraspDistanceChange(val);
+    const inpPregrasp = this.container.querySelector<HTMLInputElement>('#inp-pregrasp-dist');
+    inpPregrasp?.addEventListener('change', (e) => {
+      const val = parseFloat((e.target as HTMLInputElement).value);
+      if (!isNaN(val)) this.events.onPreGraspDistanceChange(val);
     });
 
-    // Test Grasp
-    this.container.querySelector('#btn-test-grasp')?.addEventListener('click', () => {
-      this.events.onTestGrasp();
-    });
-    this.container.querySelector('#btn-stop-test')?.addEventListener('click', () => {
-      this.events.onStopTest();
-    });
-
-    // Save Grasp
+    // Save Grasp Pose
     this.container.querySelector('#btn-save-grasp')?.addEventListener('click', () => {
       this.events.onSaveGrasp();
     });
