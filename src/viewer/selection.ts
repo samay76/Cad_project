@@ -23,6 +23,8 @@ export class SelectionManager {
 
   private pointerDownPos = { x: 0, y: 0 };
   private onSelectionChange: SelectionCallback | null = null;
+  private onRequestRender: (() => void) | null = null;
+  private isDragging = false;
 
   private boundOnPointerMove: (e: PointerEvent) => void;
   private boundOnPointerDown: (e: PointerEvent) => void;
@@ -32,6 +34,9 @@ export class SelectionManager {
   constructor(camera: THREE.Camera, domElement: HTMLElement, scene: THREE.Scene) {
     this.camera = camera;
     this.domElement = domElement;
+
+    // BVH-accelerated raycasting with firstHitOnly = true
+    (this.raycaster as any).firstHitOnly = true;
 
     // Build pick marker (sphere + normal vector arrow)
     const sphereGeom = new THREE.SphereGeometry(1.5, 16, 16);
@@ -80,6 +85,22 @@ export class SelectionManager {
     this.onSelectionChange = callback;
   }
 
+  public setOnRequestRender(callback: () => void) {
+    this.onRequestRender = callback;
+  }
+
+  /**
+   * Disables hover raycasting while TransformControls is dragging or camera is orbiting
+   */
+  public setIsDragging(dragging: boolean) {
+    this.isDragging = dragging;
+    if (dragging && this.hoveredMesh) {
+      this.clearHover();
+      this.domElement.style.cursor = 'default';
+      if (this.onRequestRender) this.onRequestRender();
+    }
+  }
+
   private updateNormalizedMouse(e: PointerEvent) {
     const rect = this.domElement.getBoundingClientRect();
     this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -87,7 +108,8 @@ export class SelectionManager {
   }
 
   private onPointerMove(e: PointerEvent) {
-    if (this.selectableMeshes.length === 0) return;
+    // Disable hover raycasting while dragging gizmo or orbiting camera
+    if (this.isDragging || this.selectableMeshes.length === 0) return;
 
     this.updateNormalizedMouse(e);
     this.raycaster.setFromCamera(this.mouse, this.camera);
@@ -102,10 +124,14 @@ export class SelectionManager {
         if (this.hoveredMesh !== this.selectedMesh) {
           this.applyHoverHighlight(this.hoveredMesh, true);
         }
+        if (this.onRequestRender) this.onRequestRender();
       }
       this.domElement.style.cursor = 'pointer';
     } else {
-      this.clearHover();
+      if (this.hoveredMesh) {
+        this.clearHover();
+        if (this.onRequestRender) this.onRequestRender();
+      }
       this.domElement.style.cursor = 'default';
     }
   }
@@ -309,9 +335,11 @@ export class SelectionManager {
     }
     this.clickedPointInfo = null;
     this.pickMarkerGroup.visible = false;
+    if (this.onRequestRender) this.onRequestRender();
   }
 
   private notifySelection() {
+    if (this.onRequestRender) this.onRequestRender();
     if (this.onSelectionChange) {
       this.onSelectionChange({
         selectedPartId: this.selectedMesh?.userData.partId ?? null,

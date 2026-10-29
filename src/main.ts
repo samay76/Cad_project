@@ -102,8 +102,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const newGrasp: SavedGrasp = {
       id: `grasp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       name: `Grasp Pose ${count}`,
-      tcpPose: state.pose, // Expressed as T_part_grasp relative to CAD part frame
-      rpy: state.rpy,
+      tcpPose: state.relativePose, // Stored as T_part_grasp relative to CAD part frame
+      rpy: state.relativeRpy,
       openingWidth: state.openingWidth,
       measuredGraspWidth: state.measuredGraspWidth,
       contactPoints: graspController.getContactPointsPart(),
@@ -123,13 +123,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     graspList?.setSelectedGraspId(newGrasp.id);
   };
 
-  // Helper to restore grasp
+  // Helper to restore grasp (places gripper at T_world_part * T_part_grasp)
   const restoreGrasp = (grasp: SavedGrasp) => {
     if (!graspController) {
       layout?.showError('Please load the gripper first.');
       return;
     }
-    graspController.setNumericPose(grasp.tcpPose.position, grasp.rpy);
+    graspController.setRelativeGraspPose(grasp.tcpPose, grasp.rpy);
     graspController.setOpeningWidth(
       grasp.measuredGraspWidth !== undefined ? grasp.measuredGraspWidth : grasp.openingWidth
     );
@@ -326,6 +326,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   partController.setOnStateChange((state) => {
     partPanel?.setPartState(state);
+    viewer?.requestRender();
+  });
+
+  partController.setOnGripperRelativeChanged(() => {
+    if (graspController) {
+      gripperPanel?.setGripperState(graspController.getCurrentState());
+    }
+    viewer?.requestRender();
   });
 
   // 7. Initialize Gripper Pose Panel in right sidebar
@@ -448,6 +456,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         graspController.setCadPartsRoot(viewer.getModelRoot());
         partController?.setCadPartsRoot(viewer.getModelRoot());
       }
+
+      graspController.setOnRequestRender(() => {
+        viewer?.requestRender();
+      });
+
+      graspController.setOnDraggingChanged((isDragging) => {
+        viewer?.getSelectionManager().setIsDragging(isDragging);
+      });
 
       (window as any).__graspController = graspController;
       (window as any).__viewer = viewer;

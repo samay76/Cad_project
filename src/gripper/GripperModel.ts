@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { URDFRobot } from 'urdf-loader';
+import { MeshBVH } from 'three-mesh-bvh';
 import { GRIPPER_CONFIG } from '../config';
 
 export class GripperModel {
@@ -22,6 +23,7 @@ export class GripperModel {
   private tcpOffset = GRIPPER_CONFIG.defaultTcpOffset;
   private isColliding = false;
 
+  // Visual meshes
   private allMeshes: THREE.Mesh[] = [];
   private fingerTipMeshes: THREE.Mesh[] = [];
   private leftFingerTipMeshes: THREE.Mesh[] = [];
@@ -29,6 +31,16 @@ export class GripperModel {
   private bodyMeshes: THREE.Mesh[] = [];
   private originalMaterials: Map<THREE.Mesh, THREE.Material | THREE.Material[]> = new Map();
   private collisionMaterial: THREE.MeshStandardMaterial;
+
+  // Low-poly collision proxies (12 triangles each, 108 triangles total)
+  private bodyProxies: THREE.Mesh[] = [];
+  private leftTipProxy: THREE.Mesh | null = null;
+  private rightTipProxy: THREE.Mesh | null = null;
+  private allProxies: THREE.Mesh[] = [];
+
+  // Reusable scratch objects
+  private _scratchBox = new THREE.Box3();
+  private _scratchVec = new THREE.Vector3();
 
   constructor(robot: URDFRobot) {
     this.root = new THREE.Group();
@@ -41,45 +53,6 @@ export class GripperModel {
     this.robot = robot;
     this.bodyGroup.add(this.robot);
 
-    // Cache original materials and collect all meshes for raycasting & collision
-    this.robot.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        this.allMeshes.push(child);
-        this.originalMaterials.set(child, child.material);
-
-        // Ensure materials display nicely under Three.js lighting
-        if (child.material instanceof THREE.MeshStandardMaterial || child.material instanceof THREE.MeshPhongMaterial) {
-          child.material.side = THREE.DoubleSide;
-        }
-      }
-    });
-
-    // Categorize fingertip contact pads vs body meshes
-    const leftTip = this.robot.links['robotiq_85_left_finger_tip_link'];
-    const rightTip = this.robot.links['robotiq_85_right_finger_tip_link'];
-    if (leftTip) {
-      leftTip.traverse((c) => {
-        if (c instanceof THREE.Mesh) {
-          this.leftFingerTipMeshes.push(c);
-          this.fingerTipMeshes.push(c);
-        }
-      });
-    }
-    if (rightTip) {
-      rightTip.traverse((c) => {
-        if (c instanceof THREE.Mesh) {
-          this.rightFingerTipMeshes.push(c);
-          this.fingerTipMeshes.push(c);
-        }
-      });
-    }
-
-    this.allMeshes.forEach((m) => {
-      if (!this.fingerTipMeshes.includes(m)) {
-        this.bodyMeshes.push(m);
-      }
-    });
-
     this.collisionMaterial = new THREE.MeshStandardMaterial({
       color: GRIPPER_CONFIG.collisionColor,
       emissive: 0xb91c1c,
@@ -88,7 +61,13 @@ export class GripperModel {
       metalness: 0.1
     });
 
-    // 1. Setup TCP Frame Visual Helpers (RGB axes + Approach Arrow + Sphere)
+    // 1. Setup visual mesh caches and material maps
+    this.setupVisualMeshes();
+
+    // 2. Setup low-poly collision proxies parented to URDF links
+    this.setupCollisionProxies();
+
+    // 3. Setup TCP Frame Visual Helpers (RGB axes + Approach Arrow + Sphere)
     this.tcpAxesHelper = new THREE.AxesHelper(30);
     this.tcpAxesHelper.renderOrder = 10;
     this.root.add(this.tcpAxesHelper);
@@ -99,7 +78,7 @@ export class GripperModel {
       approachDir,
       new THREE.Vector3(0, 0, 0),
       45,
-      0x0284c7, // vibrant cyan blue
+      0x0284c7,
       10,
       5
     );
@@ -118,6 +97,171 @@ export class GripperModel {
     this.setOpeningWidth(this.openingWidth);
   }
 
+  private setupVisualMeshes() {
+    this.allMeshes = [];
+    this.fingerTipMeshes = [];
+    this.leftFingerTipMeshes = [];
+    this.rightFingerTipMeshes = [];
+    this.bodyMeshes = [];
+    this.originalMaterials.clear();
+
+    // Cache original materials and collect all meshes for rendering
+    this.robot.traverse((child) => {
+      if ((child as any).isMesh) {
+        // Exclude collision proxies from visual mesh list
+        if (child.userData.isCollisionProxy) return;
+
+        const mesh = child as THREE.Mesh;
+        this.allMeshes.push(mesh);
+        this.originalMaterials.set(mesh, mesh.material);
+
+        if (mesh.material instanceof THREE.MeshStandardMaterial || mesh.material instanceof THREE.MeshPhongMaterial) {
+          mesh.material.side = THREE.DoubleSide;
+        }
+      }
+    });
+
+    // Categorize fingertip contact pads vs body meshes
+    const leftTip = this.robot.links['robotiq_85_left_finger_tip_link'];
+    const rightTip = this.robot.links['robotiq_85_right_finger_tip_link'];
+    if (leftTip) {
+      leftTip.traverse((c) => {
+        if ((c as any).isMesh && !c.userData.isCollisionProxy) {
+          this.leftFingerTipMeshes.push(c as THREE.Mesh);
+          this.fingerTipMeshes.push(c as THREE.Mesh);
+        }
+      });
+    }
+    if (rightTip) {
+      rightTip.traverse((c) => {
+        if ((c as any).isMesh && !c.userData.isCollisionProxy) {
+          this.rightFingerTipMeshes.push(c as THREE.Mesh);
+          this.fingerTipMeshes.push(c as THREE.Mesh);
+        }
+      });
+    }
+
+    this.allMeshes.forEach((m) => {
+      if (!this.fingerTipMeshes.includes(m)) {
+        this.bodyMeshes.push(m);
+      }
+    });
+  }
+
+  /**
+   * Builds low-poly box proxies (12 triangles each) parented to URDF links.
+   * Total gripper collision complexity: 9 links * 12 = 108 triangles.
+   * BVH computed ONCE per proxy in local space with { indirect: true, targetLeafSize: 10 }.
+   */
+  public setupCollisionProxies() {
+    this.bodyProxies = [];
+    this.allProxies = [];
+    this.leftTipProxy = null;
+    this.rightTipProxy = null;
+
+    const proxyMat = new THREE.MeshBasicMaterial({ wireframe: true, visible: false });
+
+    const linkKeys = Object.keys(this.robot.links);
+    for (const linkName of linkKeys) {
+      const link = this.robot.links[linkName];
+      if (!link) continue;
+
+      // Find the visual mesh direct child or within link (excluding nested links)
+      let visualMesh: THREE.Mesh | null = null;
+      for (const child of link.children) {
+        if ((child as any).isMesh && !child.userData.isCollisionProxy) {
+          visualMesh = child as THREE.Mesh;
+          break;
+        }
+      }
+
+      if (!visualMesh) {
+        // Fallback traverse immediate child meshes
+        link.traverse((c) => {
+          if (!visualMesh && (c as any).isMesh && !c.userData.isCollisionProxy) {
+            visualMesh = c as THREE.Mesh;
+          }
+        });
+      }
+
+      if (!visualMesh || !visualMesh.geometry) continue;
+
+      if (!visualMesh.geometry.boundingBox) {
+        visualMesh.geometry.computeBoundingBox();
+      }
+      const b = visualMesh.geometry.boundingBox!;
+      const sx = Math.max(0.002, b.max.x - b.min.x);
+      const sy = Math.max(0.002, b.max.y - b.min.y);
+      const sz = Math.max(0.002, b.max.z - b.min.z);
+
+      const cx = (b.min.x + b.max.x) / 2;
+      const cy = (b.min.y + b.max.y) / 2;
+      const cz = (b.min.z + b.max.z) / 2;
+
+      const boxGeom = new THREE.BoxGeometry(sx, sy, sz);
+      boxGeom.translate(cx, cy, cz);
+      boxGeom.computeBoundingBox();
+
+      // Build BVH ONCE in local space
+      (boxGeom as any).boundsTree = new MeshBVH(boxGeom, { indirect: true, targetLeafSize: 10 });
+
+      const proxyMesh = new THREE.Mesh(boxGeom, proxyMat);
+      proxyMesh.name = `proxy_${linkName}`;
+      proxyMesh.visible = false;
+      proxyMesh.userData.isCollisionProxy = true;
+      proxyMesh.userData.linkName = linkName;
+      proxyMesh.userData.parentVisual = visualMesh;
+
+      link.add(proxyMesh);
+      this.allProxies.push(proxyMesh);
+
+      if (linkName === 'robotiq_85_left_finger_tip_link') {
+        this.leftTipProxy = proxyMesh;
+      } else if (linkName === 'robotiq_85_right_finger_tip_link') {
+        this.rightTipProxy = proxyMesh;
+      } else {
+        this.bodyProxies.push(proxyMesh);
+      }
+    }
+  }
+
+  public getBodyProxies(): THREE.Mesh[] {
+    if (this.bodyProxies.length === 0) this.setupCollisionProxies();
+    return this.bodyProxies;
+  }
+
+  public getLeftTipProxy(): THREE.Mesh | null {
+    if (!this.leftTipProxy) this.setupCollisionProxies();
+    return this.leftTipProxy;
+  }
+
+  public getRightTipProxy(): THREE.Mesh | null {
+    if (!this.rightTipProxy) this.setupCollisionProxies();
+    return this.rightTipProxy;
+  }
+
+  public getAllProxies(): THREE.Mesh[] {
+    if (this.allProxies.length === 0) this.setupCollisionProxies();
+    return this.allProxies;
+  }
+
+  /**
+   * Fast broad-phase world-space bounding box of the entire gripper.
+   * Reuses scratch box to avoid allocations.
+   */
+  public getWholeBoundingBox(out: THREE.Box3): THREE.Box3 {
+    if (this.allProxies.length === 0) this.setupCollisionProxies();
+    out.makeEmpty();
+    for (let i = 0; i < this.allProxies.length; i++) {
+      const p = this.allProxies[i];
+      if (p.geometry && p.geometry.boundingBox) {
+        this._scratchBox.copy(p.geometry.boundingBox).applyMatrix4(p.matrixWorld);
+        out.union(this._scratchBox);
+      }
+    }
+    return out;
+  }
+
   /**
    * Sets the TCP offset in mm from mounting flange to fingertip center
    */
@@ -131,10 +275,8 @@ export class GripperModel {
   }
 
   private updateTcpOffset() {
-    // In URDF, the mounting flange is at (0,0,0) and fingers extend in +Z.
-    // Offsetting the body along -Z aligns fingertips at the TCP (0, 0, 0)
-    // with +Z pointing forward out of the gripper.
     this.bodyGroup.position.set(0, 0, -this.tcpOffset);
+    this.root.updateMatrixWorld(true);
   }
 
   /**
@@ -151,11 +293,9 @@ export class GripperModel {
     // angle 0.8 rad = fully closed (0 mm)
     const angle = (1.0 - (this.openingWidth / GRIPPER_CONFIG.maxOpeningWidth)) * 0.8;
 
-    // Set driving joint
     if (this.robot.joints['robotiq_85_left_knuckle_joint']) {
       this.robot.setJointValue('robotiq_85_left_knuckle_joint', angle);
     }
-    // Set/confirm mimic joints
     if (this.robot.joints['robotiq_85_right_knuckle_joint']) {
       this.robot.setJointValue('robotiq_85_right_knuckle_joint', -angle);
     }
@@ -171,6 +311,8 @@ export class GripperModel {
     if (this.robot.joints['robotiq_85_right_finger_tip_joint']) {
       this.robot.setJointValue('robotiq_85_right_finger_tip_joint', angle);
     }
+
+    this.root.updateMatrixWorld(true);
   }
 
   public getOpeningWidth(): number {
@@ -200,66 +342,19 @@ export class GripperModel {
     if (this.robot.joints['robotiq_85_right_finger_tip_joint']) {
       this.robot.setJointValue('robotiq_85_right_finger_tip_joint', rightAngle);
     }
+
+    this.root.updateMatrixWorld(true);
   }
 
   public getClosingAxis(): THREE.Vector3 {
-    // Fingers move along local X axis in Robotiq 2F-85 URDF
     return new THREE.Vector3(1, 0, 0);
   }
 
   public getApproachAxis(): THREE.Vector3 {
-    // Tool points along local +Z axis
     return new THREE.Vector3(0, 0, 1);
   }
 
-  public updateMeshCache() {
-    this.allMeshes = [];
-    this.fingerTipMeshes = [];
-    this.leftFingerTipMeshes = [];
-    this.rightFingerTipMeshes = [];
-    this.bodyMeshes = [];
-
-    this.robot.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        this.allMeshes.push(child);
-        this.originalMaterials.set(child, child.material);
-
-        if (child.material instanceof THREE.MeshStandardMaterial || child.material instanceof THREE.MeshPhongMaterial) {
-          child.material.side = THREE.DoubleSide;
-        }
-      }
-    });
-
-    const leftTip = this.robot.links['robotiq_85_left_finger_tip_link'];
-    const rightTip = this.robot.links['robotiq_85_right_finger_tip_link'];
-    if (leftTip) {
-      leftTip.traverse((c) => {
-        if (c instanceof THREE.Mesh) {
-          this.leftFingerTipMeshes.push(c);
-          this.fingerTipMeshes.push(c);
-        }
-      });
-    }
-    if (rightTip) {
-      rightTip.traverse((c) => {
-        if (c instanceof THREE.Mesh) {
-          this.rightFingerTipMeshes.push(c);
-          this.fingerTipMeshes.push(c);
-        }
-      });
-    }
-
-    this.allMeshes.forEach((m) => {
-      if (!this.fingerTipMeshes.includes(m)) {
-        this.bodyMeshes.push(m);
-      }
-    });
-  }
-
   public getFingerTipMeshesGrouped(): { left: THREE.Mesh[]; right: THREE.Mesh[] } {
-    if (this.leftFingerTipMeshes.length === 0 || this.rightFingerTipMeshes.length === 0) {
-      this.updateMeshCache();
-    }
     return {
       left: this.leftFingerTipMeshes,
       right: this.rightFingerTipMeshes
@@ -267,30 +362,37 @@ export class GripperModel {
   }
 
   /**
-   * Toggles collision highlight on specific penetrating meshes
+   * Toggles collision highlight on specific penetrating visual meshes.
+   * Zero per-frame allocations: swaps pre-made material references.
    */
   public highlightMeshes(penetratingMeshes: THREE.Mesh[]) {
     const hasCol = penetratingMeshes.length > 0;
     this.isColliding = hasCol;
 
-    for (const mesh of this.allMeshes) {
+    for (let i = 0; i < this.allMeshes.length; i++) {
+      const mesh = this.allMeshes[i];
       if (penetratingMeshes.includes(mesh)) {
-        mesh.material = this.collisionMaterial;
+        if (mesh.material !== this.collisionMaterial) {
+          mesh.material = this.collisionMaterial;
+        }
       } else {
         const orig = this.originalMaterials.get(mesh);
-        if (orig) mesh.material = orig;
+        if (orig && mesh.material !== orig) {
+          mesh.material = orig;
+        }
       }
     }
   }
 
   /**
-   * Toggles collision highlight
+   * Toggles collision highlight across all meshes
    */
   public setCollisionHighlight(colliding: boolean) {
     if (this.isColliding === colliding) return;
     this.isColliding = colliding;
 
-    for (const mesh of this.allMeshes) {
+    for (let i = 0; i < this.allMeshes.length; i++) {
+      const mesh = this.allMeshes[i];
       if (colliding) {
         mesh.material = this.collisionMaterial;
       } else {
@@ -305,17 +407,14 @@ export class GripperModel {
   }
 
   public getAllMeshes(): THREE.Mesh[] {
-    if (this.allMeshes.length === 0) this.updateMeshCache();
     return this.allMeshes;
   }
 
   public getFingerTipMeshes(): THREE.Mesh[] {
-    if (this.fingerTipMeshes.length === 0) this.updateMeshCache();
     return this.fingerTipMeshes;
   }
 
   public getBodyMeshes(): THREE.Mesh[] {
-    if (this.bodyMeshes.length === 0) this.updateMeshCache();
     return this.bodyMeshes;
   }
 
@@ -337,5 +436,9 @@ export class GripperModel {
     this.tcpCenterSphere.geometry.dispose();
     (this.tcpCenterSphere.material as THREE.Material).dispose();
     this.collisionMaterial.dispose();
+    for (const p of this.allProxies) {
+      p.geometry.dispose();
+      (p.material as THREE.Material).dispose();
+    }
   }
 }

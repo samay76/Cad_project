@@ -1,43 +1,87 @@
 import * as THREE from 'three';
-import type { Pose, EulerAngles, Vector3D, QuaternionD } from '../types';
+import type { Pose, EulerAngles, Vector3D } from '../types';
 
 /**
  * Centralized Pose & Coordinate Frame Transform Math
- * Conventions:
- * - T_world_part: Pose/Matrix of CAD Part frame relative to World frame
- * - T_world_grasp: Pose/Matrix of Gripper TCP frame relative to World frame
- * - T_part_grasp: Pose/Matrix of Gripper TCP expressed relative to CAD Part frame
  * 
- * Math relation:
- *   T_world_grasp = T_world_part * T_part_grasp
- *   T_part_grasp  = inv(T_world_part) * T_world_grasp
+ * Required Transforms:
+ * - T_world_part: Transform/Matrix of CAD Part frame in World space
+ * - T_world_gripper: Transform/Matrix of Gripper TCP frame in World space
+ * - T_part_grasp: Relative transform of Gripper TCP in CAD Part local frame
+ * 
+ * Relations:
+ *   T_part_grasp = inverse(T_world_part) * T_world_gripper
+ *   T_world_gripper = T_world_part * T_part_grasp
  */
 
 export class PoseMath {
-  private static tempMat1 = new THREE.Matrix4();
-  private static tempMat2 = new THREE.Matrix4();
-  private static tempInv = new THREE.Matrix4();
+  // Reusable scratch objects for allocation-free hot path computations
+  private static _pos = new THREE.Vector3();
+  private static _quat = new THREE.Quaternion();
+  private static _scale = new THREE.Vector3();
+  private static _euler = new THREE.Euler(0, 0, 0, 'XYZ');
+  private static _invMat = new THREE.Matrix4();
+  private static _scratchMat = new THREE.Matrix4();
+  private static _scratchMat2 = new THREE.Matrix4();
+
+  /**
+   * Gets T_world_part matrix from cadPartsRoot
+   */
+  public static getT_world_part(cadPartsRoot: THREE.Object3D | null): THREE.Matrix4 {
+    if (!cadPartsRoot) return this._scratchMat.identity();
+    cadPartsRoot.updateMatrixWorld(true);
+    return cadPartsRoot.matrixWorld;
+  }
+
+  /**
+   * Gets T_world_gripper matrix from gripperRoot (TCP)
+   */
+  public static getT_world_gripper(gripperRoot: THREE.Object3D | null): THREE.Matrix4 {
+    if (!gripperRoot) return this._scratchMat.identity();
+    gripperRoot.updateMatrixWorld(true);
+    return gripperRoot.matrixWorld;
+  }
+
+  /**
+   * Computes on demand: T_part_grasp = inverse(T_world_part) * T_world_gripper
+   */
+  public static computeT_part_grasp(
+    T_world_part: THREE.Matrix4,
+    T_world_gripper: THREE.Matrix4,
+    out = new THREE.Matrix4()
+  ): THREE.Matrix4 {
+    this._invMat.copy(T_world_part).invert();
+    return out.multiplyMatrices(this._invMat, T_world_gripper);
+  }
+
+  /**
+   * Computes: T_world_gripper = T_world_part * T_part_grasp
+   */
+  public static computeT_world_gripper(
+    T_world_part: THREE.Matrix4,
+    T_part_grasp: THREE.Matrix4,
+    out = new THREE.Matrix4()
+  ): THREE.Matrix4 {
+    return out.multiplyMatrices(T_world_part, T_part_grasp);
+  }
 
   /**
    * Converts a Three.js Matrix4 to a serializable Pose (position xyz in mm + quaternion xyzw)
    */
   public static matrixToPose(matrix: THREE.Matrix4): Pose {
-    const pos = new THREE.Vector3();
-    const quat = new THREE.Quaternion();
-    const scale = new THREE.Vector3();
-    matrix.decompose(pos, quat, scale);
+    matrix.decompose(this._pos, this._quat, this._scale);
 
     return {
       position: {
-        x: Number(pos.x.toFixed(3)),
-        y: Number(pos.y.toFixed(3)),
-        z: Number(pos.z.toFixed(3))
+        x: Number(this._pos.x.toFixed(3)),
+        y: Number(this._pos.y.toFixed(3)),
+        z: Number(this._pos.z.toFixed(3))
       },
       orientation: {
-        x: Number(quat.x.toFixed(4)),
-        y: Number(quat.y.toFixed(4)),
-        z: Number(quat.z.toFixed(4)),
-        w: Number(quat.w.toFixed(4))
+        x: Number(this._quat.x.toFixed(4)),
+        y: Number(this._quat.y.toFixed(4)),
+        z: Number(this._quat.z.toFixed(4)),
+        w: Number(this._quat.w.toFixed(4))
       }
     };
   }
@@ -45,51 +89,51 @@ export class PoseMath {
   /**
    * Converts a Pose to a Three.js Matrix4
    */
-  public static poseToMatrix(pose: Pose): THREE.Matrix4 {
-    const pos = new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z);
-    const quat = new THREE.Quaternion(
+  public static poseToMatrix(pose: Pose, out = new THREE.Matrix4()): THREE.Matrix4 {
+    this._pos.set(pose.position.x, pose.position.y, pose.position.z);
+    this._quat.set(
       pose.orientation.x,
       pose.orientation.y,
       pose.orientation.z,
       pose.orientation.w
     );
-    return new THREE.Matrix4().compose(pos, quat, new THREE.Vector3(1, 1, 1));
+    this._scale.set(1, 1, 1);
+    return out.compose(this._pos, this._quat, this._scale);
   }
 
   /**
    * Converts a quaternion to Euler Roll, Pitch, Yaw in degrees (XYZ order)
    */
   public static quaternionToEulerRPY(quat: THREE.Quaternion): EulerAngles {
-    const euler = new THREE.Euler().setFromQuaternion(quat, 'XYZ');
+    this._euler.setFromQuaternion(quat, 'XYZ');
     return {
-      roll: Number(THREE.MathUtils.radToDeg(euler.x).toFixed(2)),
-      pitch: Number(THREE.MathUtils.radToDeg(euler.y).toFixed(2)),
-      yaw: Number(THREE.MathUtils.radToDeg(euler.z).toFixed(2))
+      roll: Number(THREE.MathUtils.radToDeg(this._euler.x).toFixed(2)),
+      pitch: Number(THREE.MathUtils.radToDeg(this._euler.y).toFixed(2)),
+      yaw: Number(THREE.MathUtils.radToDeg(this._euler.z).toFixed(2))
     };
   }
 
   /**
    * Converts Euler Roll, Pitch, Yaw in degrees to a Three.js Quaternion
    */
-  public static eulerRPYToQuaternion(rpy: EulerAngles): THREE.Quaternion {
-    const euler = new THREE.Euler(
+  public static eulerRPYToQuaternion(rpy: EulerAngles, out = new THREE.Quaternion()): THREE.Quaternion {
+    this._euler.set(
       THREE.MathUtils.degToRad(rpy.roll),
       THREE.MathUtils.degToRad(rpy.pitch),
       THREE.MathUtils.degToRad(rpy.yaw),
       'XYZ'
     );
-    return new THREE.Quaternion().setFromEuler(euler);
+    return out.setFromEuler(this._euler);
   }
 
   /**
-   * Computes T_part_grasp = inv(T_world_part) * T_world_grasp
+   * Computes T_part_grasp relative matrix: alias for computeT_part_grasp
    */
   public static computePartGraspMatrix(
     T_world_part: THREE.Matrix4,
     T_world_grasp: THREE.Matrix4
   ): THREE.Matrix4 {
-    this.tempInv.copy(T_world_part).invert();
-    return new THREE.Matrix4().multiplyMatrices(this.tempInv, T_world_grasp);
+    return this.computeT_part_grasp(T_world_part, T_world_grasp);
   }
 
   /**
@@ -99,8 +143,8 @@ export class PoseMath {
     T_world_part: THREE.Matrix4,
     T_world_grasp: THREE.Matrix4
   ): Pose {
-    const mat = this.computePartGraspMatrix(T_world_part, T_world_grasp);
-    return this.matrixToPose(mat);
+    this.computeT_part_grasp(T_world_part, T_world_grasp, this._scratchMat);
+    return this.matrixToPose(this._scratchMat);
   }
 
   /**
@@ -110,7 +154,7 @@ export class PoseMath {
     T_world_part: THREE.Matrix4,
     T_part_grasp: THREE.Matrix4
   ): THREE.Matrix4 {
-    return new THREE.Matrix4().multiplyMatrices(T_world_part, T_part_grasp);
+    return this.computeT_world_gripper(T_world_part, T_part_grasp);
   }
 
   /**
@@ -120,13 +164,12 @@ export class PoseMath {
     T_world_part: THREE.Matrix4,
     graspPose: Pose
   ): { position: THREE.Vector3; quaternion: THREE.Quaternion } {
-    const T_part_grasp = this.poseToMatrix(graspPose);
-    const T_world_grasp = this.computeWorldGraspMatrix(T_world_part, T_part_grasp);
+    this.poseToMatrix(graspPose, this._scratchMat2);
+    this.computeT_world_gripper(T_world_part, this._scratchMat2, this._scratchMat);
 
     const pos = new THREE.Vector3();
     const quat = new THREE.Quaternion();
-    const scale = new THREE.Vector3();
-    T_world_grasp.decompose(pos, quat, scale);
+    this._scratchMat.decompose(pos, quat, this._scale);
 
     return { position: pos, quaternion: quat };
   }
@@ -138,12 +181,12 @@ export class PoseMath {
     worldPoint: THREE.Vector3,
     T_world_part: THREE.Matrix4
   ): Vector3D {
-    this.tempInv.copy(T_world_part).invert();
-    const pt = worldPoint.clone().applyMatrix4(this.tempInv);
+    this._invMat.copy(T_world_part).invert();
+    this._pos.copy(worldPoint).applyMatrix4(this._invMat);
     return {
-      x: Number(pt.x.toFixed(3)),
-      y: Number(pt.y.toFixed(3)),
-      z: Number(pt.z.toFixed(3))
+      x: Number(this._pos.x.toFixed(3)),
+      y: Number(this._pos.y.toFixed(3)),
+      z: Number(this._pos.z.toFixed(3))
     };
   }
 

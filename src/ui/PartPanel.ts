@@ -68,10 +68,10 @@ export class PartPanel {
             </div>
 
             <div class="lock-checkbox-row">
-              <label class="checkbox-label" title="When ON, moving or rotating the part moves the gripper with it so grasp relative to part does not change">
-                <input type="checkbox" id="chk-lock-gripper" checked />
+              <label class="checkbox-label" title="When ON, moving or rotating the part moves the gripper with it. When OFF (default), the part moves independently without moving the gripper.">
+                <input type="checkbox" id="chk-lock-gripper" />
                 <span class="checkbox-custom"></span>
-                <span class="checkbox-text">Lock gripper to part</span>
+                <span class="checkbox-text">Move gripper together with part</span>
               </label>
             </div>
           </div>
@@ -217,7 +217,7 @@ export class PartPanel {
     if (inpYaw && document.activeElement !== inpYaw) inpYaw.value = this.state.rpy.yaw.toFixed(1);
 
     if (chkLock) {
-      chkLock.checked = this.state.lockGripperToPart;
+      chkLock.checked = this.state.moveGripperTogetherWithPart ?? this.state.lockGripperToPart ?? false;
     }
   }
 

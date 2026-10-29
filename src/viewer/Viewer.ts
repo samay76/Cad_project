@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { SelectionManager } from './selection';
 import { loadCADFile, type LoadedCADResult } from './loaders';
+import { PerformanceHUD } from '../ui/PerformanceHUD';
 import type { CADModelMetadata, SelectionState, PartInfo } from '../types';
 
 export class Viewer {
@@ -26,6 +27,13 @@ export class Viewer {
   private isWireframe = false;
   private animationFrameId: number | null = null;
   private resizeObserver: ResizeObserver | null = null;
+
+  // Render on-demand flags
+  private needsRender = true;
+  private activeAnimations = 0;
+
+  // Performance HUD
+  private perfHUD: PerformanceHUD;
 
   // Mini orientation gizmo
   private gizmoCanvas: HTMLCanvasElement;
@@ -95,12 +103,31 @@ export class Viewer {
     this.gizmoScene = gizmoScene;
     this.gizmoCamera = gizmoCamera;
 
+    // Performance HUD
+    this.perfHUD = new PerformanceHUD(this.container);
+
     // Setup Selection Manager
     this.selectionManager = new SelectionManager(this.camera, this.canvas, this.scene);
     this.selectionManager.setSelectionCallback((state) => {
       if (this.onSelectionChangedCallback) {
         this.onSelectionChangedCallback(state);
       }
+    });
+    this.selectionManager.setOnRequestRender(() => {
+      this.requestRender();
+    });
+
+    // OrbitControls event listeners for render-on-demand & hover suppression
+    this.controls.addEventListener('start', () => {
+      this.selectionManager.setIsDragging(true);
+      this.requestRender();
+    });
+    this.controls.addEventListener('end', () => {
+      this.selectionManager.setIsDragging(false);
+      this.requestRender();
+    });
+    this.controls.addEventListener('change', () => {
+      this.requestRender();
     });
 
     // Handle Window/Container Resize
@@ -109,6 +136,26 @@ export class Viewer {
     // Start Rendering Loop
     this.animate = this.animate.bind(this);
     this.animate();
+  }
+
+  public requestRender() {
+    this.needsRender = true;
+  }
+
+  public startAnimation() {
+    this.activeAnimations++;
+  }
+
+  public stopAnimation() {
+    this.activeAnimations = Math.max(0, this.activeAnimations - 1);
+  }
+
+  public getPerformanceHUD(): PerformanceHUD {
+    return this.perfHUD;
+  }
+
+  public getSelectionManager(): SelectionManager {
+    return this.selectionManager;
   }
 
   private setupLighting() {
@@ -274,16 +321,25 @@ export class Viewer {
   private animate() {
     this.animationFrameId = requestAnimationFrame(this.animate);
 
-    this.controls.update();
-    this.renderer.render(this.scene, this.camera);
+    const controlsChanged = this.controls.update();
+    if (controlsChanged) {
+      this.needsRender = true;
+    }
 
-    // Sync Orientation Gizmo
-    if (this.gizmoCamera && this.gizmoRenderer && this.gizmoScene) {
-      const dir = this.camera.position.clone().sub(this.controls.target).normalize();
-      this.gizmoCamera.position.copy(dir.multiplyScalar(3.2));
-      this.gizmoCamera.up.copy(this.camera.up);
-      this.gizmoCamera.lookAt(0, 0, 0);
-      this.gizmoRenderer.render(this.gizmoScene, this.gizmoCamera);
+    if (this.needsRender || this.activeAnimations > 0) {
+      this.renderer.render(this.scene, this.camera);
+
+      // Sync Orientation Gizmo
+      if (this.gizmoCamera && this.gizmoRenderer && this.gizmoScene) {
+        const dir = this.camera.position.clone().sub(this.controls.target).normalize();
+        this.gizmoCamera.position.copy(dir.multiplyScalar(3.2));
+        this.gizmoCamera.up.copy(this.camera.up);
+        this.gizmoCamera.lookAt(0, 0, 0);
+        this.gizmoRenderer.render(this.gizmoScene, this.gizmoCamera);
+      }
+
+      this.needsRender = false;
+      this.perfHUD.recordFrame();
     }
   }
 
@@ -454,6 +510,10 @@ export class Viewer {
 
   public getModelRoot(): THREE.Group | null {
     return this.modelRoot;
+  }
+
+  public getCurrentMetadata(): CADModelMetadata | null {
+    return this.currentMetadata;
   }
 
   private moveCameraTo(position: THREE.Vector3, target: THREE.Vector3, animate = true) {

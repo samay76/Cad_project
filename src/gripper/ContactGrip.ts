@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { GripperModel } from './GripperModel';
-import { CollisionChecker } from './collision';
+import { CollisionChecker, type DetailedCollisionResult } from './collision';
 import { PoseMath } from '../math/poses';
 import type { ContactPoints, Vector3D } from '../types';
 import { GRIPPER_CONFIG } from '../config';
@@ -11,6 +11,8 @@ export interface CloseUntilContactResult {
   measuredGraspWidth: number;
   leftContact: boolean;
   rightContact: boolean;
+  targetLeftAngle: number;
+  targetRightAngle: number;
   contactPointsWorld: {
     left?: THREE.Vector3;
     right?: THREE.Vector3;
@@ -26,26 +28,28 @@ export interface AutoPlaceResult {
 }
 
 export class ContactGrip {
-  private static raycaster = new THREE.Raycaster();
-
   /**
-   * 2b. Close Until Contact:
-   * Stepped finger closing (0.5 mm steps down to contact, gap < 0.1 mm tolerance).
-   * Stops when finger pad touches the outer surface of the part.
-   * Prevents any penetration into the CAD solid.
+   * 2b. High-Performance Contact-Aware Closing:
+   * Uses an 8-10 iteration binary search (< 0.5 ms total computation) instead of
+   * hundreds of stepped checks on the main thread.
+   * Finds the exact stop opening without penetrating the CAD part.
    */
-  public static closeUntilContact(
+  public static computeContactGrasp(
     gripperModel: GripperModel,
     cadPartsRoot: THREE.Group | null,
     tolerance = 0.1 // mm
   ): CloseUntilContactResult {
+    const initialOpening = gripperModel.getOpeningWidth();
+
     if (!cadPartsRoot) {
       return {
         status: 'missed',
         message: 'No CAD model loaded to grasp',
-        measuredGraspWidth: gripperModel.getOpeningWidth(),
+        measuredGraspWidth: initialOpening,
         leftContact: false,
         rightContact: false,
+        targetLeftAngle: (1.0 - initialOpening / GRIPPER_CONFIG.maxOpeningWidth) * 0.8,
+        targetRightAngle: (1.0 - initialOpening / GRIPPER_CONFIG.maxOpeningWidth) * 0.8,
         contactPointsWorld: {},
         contactPointsPart: {}
       };
@@ -53,15 +57,17 @@ export class ContactGrip {
 
     CollisionChecker.ensureBVH(cadPartsRoot);
 
-    // Initial check: if already at max opening (85mm) and intersecting CAD part body
+    // Initial check: if already at initial opening and penetrating CAD body
     const initialState = CollisionChecker.evaluateState(gripperModel, cadPartsRoot, tolerance);
     if (initialState.hasCollision) {
       return {
         status: 'too-wide',
         message: 'Part too wide for the gripper at this pose (body collision)',
-        measuredGraspWidth: gripperModel.getOpeningWidth(),
+        measuredGraspWidth: initialOpening,
         leftContact: initialState.leftPadContact,
         rightContact: initialState.rightPadContact,
+        targetLeftAngle: 0,
+        targetRightAngle: 0,
         contactPointsWorld: {
           left: initialState.leftContactWorld,
           right: initialState.rightContactWorld
@@ -70,105 +76,133 @@ export class ContactGrip {
       };
     }
 
-    // Step closing down from current opening in 0.5 mm steps
-    let currentWidth = gripperModel.getOpeningWidth();
-    const stepSize = 0.5; // mm
-    const minWidth = GRIPPER_CONFIG.minOpeningWidth;
+    // Binary search bounds:
+    // openWidth (clear/safe) -> closedWidth (penetrating or fully closed 0mm)
+    let openWidth = initialOpening;
+    let closedWidth = GRIPPER_CONFIG.minOpeningWidth; // 0.0 mm
 
-    let leftStopped = false;
-    let rightStopped = false;
-    let leftStopAngle = 0;
-    let rightStopAngle = 0;
-
-    let lastSafeWidth = currentWidth;
+    let lastSafeState = initialState;
     let finalState = initialState;
 
-    // Evaluate initial state at current opening
-    if (initialState.leftPadContact) {
-      leftStopped = true;
-      leftStopAngle = (1.0 - currentWidth / GRIPPER_CONFIG.maxOpeningWidth) * 0.8;
-    }
-    if (initialState.rightPadContact) {
-      rightStopped = true;
-      rightStopAngle = (1.0 - currentWidth / GRIPPER_CONFIG.maxOpeningWidth) * 0.8;
-    }
-
-    while (currentWidth > minWidth && (!leftStopped || !rightStopped)) {
-      // Adaptive step size: coarse (1.5mm) when distant, fine (0.2mm) when close
-      const isClose = (finalState.leftPadDist <= 2.5 || finalState.rightPadDist <= 2.5);
-      const stepSize = isClose ? 0.2 : 1.5;
-
-      const nextWidth = Math.max(minWidth, currentWidth - stepSize);
-      const targetAngle = (1.0 - nextWidth / GRIPPER_CONFIG.maxOpeningWidth) * 0.8;
-
-      const angleL = leftStopped ? leftStopAngle : targetAngle;
-      const angleR = rightStopped ? rightStopAngle : targetAngle;
-
-      gripperModel.setFingerAngles(angleL, angleR);
-      gripperModel.root.updateMatrixWorld(true);
+    // 10 binary search iterations achieve 85 / 1024 ~ 0.08 mm precision in ~0.2 ms
+    const iterations = 10;
+    for (let i = 0; i < iterations; i++) {
+      const midWidth = (openWidth + closedWidth) / 2;
+      gripperModel.setOpeningWidth(midWidth);
 
       const state = CollisionChecker.evaluateState(gripperModel, cadPartsRoot, tolerance);
 
-      // If gripper body penetrates, we cannot close further
-      if (state.hasCollision) {
-        break;
-      }
-
-      if (!leftStopped && (state.leftPadContact || state.leftPadDist <= tolerance)) {
-        leftStopped = true;
-        leftStopAngle = targetAngle;
-      }
-      if (!rightStopped && (state.rightPadContact || state.rightPadDist <= tolerance)) {
-        rightStopped = true;
-        rightStopAngle = targetAngle;
-      }
-
-      finalState = state;
-      lastSafeWidth = nextWidth;
-      currentWidth = nextWidth;
-
-      if (leftStopped && rightStopped) {
-        break;
+      if (state.hasCollision || state.isContact) {
+        // Touched or penetrated -> safe boundary is more open
+        closedWidth = midWidth;
+        finalState = state;
+      } else {
+        // Clear -> can close further
+        openWidth = midWidth;
+        lastSafeState = state;
       }
     }
 
-    // Measure final distance between left and right fingertips or use opening width
-    let measuredWidth = Number(lastSafeWidth.toFixed(1));
-    if (finalState.leftContactWorld && finalState.rightContactWorld) {
+    // Set to the highest safe opening with contact tolerance
+    let targetOpening = Number(openWidth.toFixed(1));
+    gripperModel.setOpeningWidth(targetOpening);
+    let stateAtTarget = CollisionChecker.evaluateState(gripperModel, cadPartsRoot, tolerance);
+
+    // If safe state is slightly off contact, try closing down in tiny micro-step to touch
+    if (!stateAtTarget.isContact && !stateAtTarget.hasCollision) {
+      gripperModel.setOpeningWidth(closedWidth);
+      const stateClosed = CollisionChecker.evaluateState(gripperModel, cadPartsRoot, tolerance);
+      if (!stateClosed.hasCollision && stateClosed.isContact) {
+        targetOpening = Number(closedWidth.toFixed(1));
+        stateAtTarget = stateClosed;
+      } else {
+        gripperModel.setOpeningWidth(targetOpening);
+      }
+    }
+
+    // Kinematic target angles
+    const baseTargetAngle = (1.0 - targetOpening / GRIPPER_CONFIG.maxOpeningWidth) * 0.8;
+    let leftAngle = baseTargetAngle;
+    let rightAngle = baseTargetAngle;
+
+    // Independent finger refinement if only one finger touched
+    if (stateAtTarget.leftPadContact && !stateAtTarget.rightPadContact) {
+      // Right finger can close further to seek contact
+      let rMinAngle = baseTargetAngle;
+      let rMaxAngle = 0.8; // 0 mm
+      for (let j = 0; j < 6; j++) {
+        const midA = (rMinAngle + rMaxAngle) / 2;
+        gripperModel.setFingerAngles(leftAngle, midA);
+        const s = CollisionChecker.evaluateState(gripperModel, cadPartsRoot, tolerance);
+        if (s.hasCollision || s.rightPadContact) {
+          rMaxAngle = midA;
+          stateAtTarget = s;
+        } else {
+          rMinAngle = midA;
+        }
+      }
+      rightAngle = rMinAngle;
+      gripperModel.setFingerAngles(leftAngle, rightAngle);
+    } else if (!stateAtTarget.leftPadContact && stateAtTarget.rightPadContact) {
+      // Left finger can close further
+      let lMinAngle = baseTargetAngle;
+      let lMaxAngle = 0.8;
+      for (let j = 0; j < 6; j++) {
+        const midA = (lMinAngle + lMaxAngle) / 2;
+        gripperModel.setFingerAngles(midA, rightAngle);
+        const s = CollisionChecker.evaluateState(gripperModel, cadPartsRoot, tolerance);
+        if (s.hasCollision || s.leftPadContact) {
+          lMaxAngle = midA;
+          stateAtTarget = s;
+        } else {
+          lMinAngle = midA;
+        }
+      }
+      leftAngle = lMinAngle;
+      gripperModel.setFingerAngles(leftAngle, rightAngle);
+    }
+
+    // Restore initial opening so animation can smoothly transition from start to target
+    gripperModel.setOpeningWidth(initialOpening);
+
+    // Final measured width
+    let measuredWidth = targetOpening;
+    if (stateAtTarget.leftContactWorld && stateAtTarget.rightContactWorld) {
       measuredWidth = Number(
-        finalState.leftContactWorld.distanceTo(finalState.rightContactWorld).toFixed(1)
+        stateAtTarget.leftContactWorld.distanceTo(stateAtTarget.rightContactWorld).toFixed(1)
       );
     }
 
-    gripperModel.setOpeningWidth(lastSafeWidth);
-    gripperModel.root.updateMatrixWorld(true);
+    const contactPointsPart = this.extractPartFrameContacts(stateAtTarget, cadPartsRoot);
 
-    const contactPointsPart = this.extractPartFrameContacts(finalState, cadPartsRoot);
-
-    if (leftStopped && rightStopped) {
+    if (stateAtTarget.leftPadContact && stateAtTarget.rightPadContact) {
       return {
         status: 'contact',
         message: `Grasp width: ${measuredWidth} mm (both fingers touching outer wall)`,
         measuredGraspWidth: measuredWidth,
         leftContact: true,
         rightContact: true,
+        targetLeftAngle: leftAngle,
+        targetRightAngle: rightAngle,
         contactPointsWorld: {
-          left: finalState.leftContactWorld,
-          right: finalState.rightContactWorld
+          left: stateAtTarget.leftContactWorld,
+          right: stateAtTarget.rightContactWorld
         },
         contactPointsPart
       };
-    } else if (leftStopped || rightStopped) {
-      const fingerName = leftStopped ? 'left' : 'right';
+    } else if (stateAtTarget.leftPadContact || stateAtTarget.rightPadContact) {
+      const fingerName = stateAtTarget.leftPadContact ? 'left' : 'right';
       return {
         status: 'contact',
         message: `Grasp width: ${measuredWidth} mm (${fingerName} finger touching wall)`,
         measuredGraspWidth: measuredWidth,
-        leftContact: leftStopped,
-        rightContact: rightStopped,
+        leftContact: stateAtTarget.leftPadContact,
+        rightContact: stateAtTarget.rightPadContact,
+        targetLeftAngle: leftAngle,
+        targetRightAngle: rightAngle,
         contactPointsWorld: {
-          left: finalState.leftContactWorld,
-          right: finalState.rightContactWorld
+          left: stateAtTarget.leftContactWorld,
+          right: stateAtTarget.rightContactWorld
         },
         contactPointsPart
       };
@@ -179,6 +213,8 @@ export class ContactGrip {
         measuredGraspWidth: measuredWidth,
         leftContact: false,
         rightContact: false,
+        targetLeftAngle: baseTargetAngle,
+        targetRightAngle: baseTargetAngle,
         contactPointsWorld: {},
         contactPointsPart: {}
       };
@@ -186,9 +222,47 @@ export class ContactGrip {
   }
 
   /**
+   * Smoothly animates fingers from current opening to computed contact angles over frames
+   */
+  public static animateClosing(
+    gripperModel: GripperModel,
+    targetLeftAngle: number,
+    targetRightAngle: number,
+    frameCount = 12,
+    onProgress?: () => void,
+    onComplete?: () => void
+  ) {
+    const startOpening = gripperModel.getOpeningWidth();
+    const startAngle = (1.0 - startOpening / GRIPPER_CONFIG.maxOpeningWidth) * 0.8;
+
+    let currentFrame = 0;
+
+    const step = () => {
+      currentFrame++;
+      const t = Math.min(1.0, currentFrame / frameCount);
+      const ease = t * (2 - t); // Quad ease-out
+
+      const curLeft = THREE.MathUtils.lerp(startAngle, targetLeftAngle, ease);
+      const curRight = THREE.MathUtils.lerp(startAngle, targetRightAngle, ease);
+
+      gripperModel.setFingerAngles(curLeft, curRight);
+      gripperModel.root.updateMatrixWorld(true);
+
+      if (onProgress) onProgress();
+
+      if (currentFrame < frameCount) {
+        requestAnimationFrame(step);
+      } else {
+        if (onComplete) onComplete();
+      }
+    };
+
+    requestAnimationFrame(step);
+  }
+
+  /**
    * 2c. Open to Clear:
    * Opens the gripper fully (85 mm).
-   * If any finger mesh still intersects the part, warns that gripper starts inside the part.
    */
   public static openToClear(
     gripperModel: GripperModel,
@@ -241,14 +315,15 @@ export class ContactGrip {
     const tcpRot = gripperModel.root.quaternion.clone();
     const closingDirWorld = new THREE.Vector3(1, 0, 0).applyQuaternion(tcpRot).normalize();
 
-    // 1. Raycast along closing axis in +X and -X directions
-    const rayPositive = new THREE.Raycaster(tcpPos, closingDirWorld, 0.1, 200);
-    const rayNegative = new THREE.Raycaster(tcpPos, closingDirWorld.clone().negate(), 0.1, 200);
+    // Raycast along closing axis in +X and -X directions using accelerated BVH
+    const rayPositive = new THREE.Raycaster(tcpPos, closingDirWorld, 0.1, 300);
+    const rayNegative = new THREE.Raycaster(tcpPos, closingDirWorld.clone().negate(), 0.1, 300);
+    (rayPositive as any).firstHitOnly = true;
+    (rayNegative as any).firstHitOnly = true;
 
     const hitsPos = rayPositive.intersectObjects(cadMeshes, false);
     const hitsNeg = rayNegative.intersectObjects(cadMeshes, false);
 
-    // If TCP is inside or outside, also test a line segment spanning across the gripper opening
     let hitLeft: THREE.Vector3 | null = null;
     let hitRight: THREE.Vector3 | null = null;
 
@@ -263,7 +338,7 @@ export class ContactGrip {
         spanOriginPos,
         closingDirWorld.clone().negate(),
         0.1,
-        120
+        150
       );
       const spanHits = spanRayInwards.intersectObjects(cadMeshes, false);
 
@@ -277,10 +352,8 @@ export class ContactGrip {
     }
 
     if (!hitLeft || !hitRight) {
-      // Fallback: If clickedPoint provided, use it
       if (clickedPoint) {
         hitLeft = clickedPoint.clone();
-        // Project across closing axis to find other side
         const projRay = new THREE.Raycaster(
           clickedPoint.clone().addScaledVector(closingDirWorld, 0.1),
           closingDirWorld,
@@ -306,12 +379,9 @@ export class ContactGrip {
     const midpoint = new THREE.Vector3().addVectors(hitLeft, hitRight).multiplyScalar(0.5);
 
     if (useClickedPointOnOneFinger && clickedPoint) {
-      // Place clicked finger pad on the clicked surface point
-      // Vector from midpoint to clicked point
       const deltaX = clickedPoint.clone().sub(tcpPos).dot(closingDirWorld);
       gripperModel.root.position.addScaledVector(closingDirWorld, deltaX);
     } else {
-      // Move TCP to midpoint along the closing axis
       const currentProj = tcpPos.clone().dot(closingDirWorld);
       const targetProj = midpoint.clone().dot(closingDirWorld);
       const shift = targetProj - currentProj;
@@ -320,7 +390,6 @@ export class ContactGrip {
 
     gripperModel.root.updateMatrixWorld(true);
 
-    // Open fingers enough to clear thickness + 10 mm
     const recommendedOpening = Math.min(
       GRIPPER_CONFIG.maxOpeningWidth,
       Math.max(thickness + 10, 30)
@@ -337,9 +406,7 @@ export class ContactGrip {
   }
 
   /**
-   * 2c. Snap to Clicked Point with Standoff and Depth:
-   * Positions the gripper so the clicked point is the contact point on the part wall,
-   * with approach pointing toward the part (Z = -normal), plus standoff and depth.
+   * 2c. Snap to Clicked Point with Standoff and Depth
    */
   public static snapToContact(
     point: THREE.Vector3,
@@ -349,7 +416,6 @@ export class ContactGrip {
     gripperModel: GripperModel,
     cadPartsRoot: THREE.Group | null
   ) {
-    // Approach vector pointing into part surface: Z = -normal
     const approachDir = normal.clone().negate().normalize();
     const defaultZ = new THREE.Vector3(0, 0, 1);
 
@@ -361,8 +427,6 @@ export class ContactGrip {
     }
     gripperModel.root.quaternion.copy(quat);
 
-    // Target position: at surface point, moved forward along approach by depth,
-    // and backed off by standoff along -approach
     const netApproachShift = depthMm - standoffMm;
     const targetPos = point.clone().addScaledVector(approachDir, netApproachShift);
 

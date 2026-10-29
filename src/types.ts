@@ -128,8 +128,10 @@ export interface GripperState {
   depth: number; // mm
   tcpOffset: number; // mm
   preGraspDistance: number; // mm
-  pose: Pose; // T_part_grasp in mm
-  rpy: EulerAngles;
+  pose: Pose; // T_world_gripper in world frame
+  rpy: EulerAngles; // world roll pitch yaw
+  relativePose: Pose; // T_part_grasp: Gripper TCP relative to Part frame
+  relativeRpy: EulerAngles; // Relative roll pitch yaw
   hasCollision: boolean;
   isTesting: boolean;
   testPhase: TestPhase;
@@ -137,7 +139,8 @@ export interface GripperState {
 }
 
 export interface PartPoseState {
-  pose: Pose; // T_world_part
+  pose: Pose; // T_world_part in world frame
   rpy: EulerAngles;
-  lockGripperToPart: boolean;
+  moveGripperTogetherWithPart: boolean;
+  lockGripperToPart?: boolean; // alias for compatibility
 }

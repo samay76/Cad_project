@@ -273,7 +273,7 @@ export class GripperPanel {
                 <line x1="9" y1="9" x2="15" y2="15"/>
                 <line x1="15" y1="9" x2="9" y2="15"/>
               </svg>
-              <span>TCP Pose (Part Frame)</span>
+              <span>Gripper Pose (World Frame)</span>
             </div>
 
             <div class="numeric-inputs-grid">
@@ -300,6 +300,24 @@ export class GripperPanel {
               <div class="num-input-item">
                 <label>Yaw (°)</label>
                 <input type="number" id="inp-rpy-y" step="1" value="0.0" />
+              </div>
+            </div>
+
+            <!-- Read-only Gripper relative to part readout -->
+            <div class="relative-pose-card">
+              <div class="relative-pose-title">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                </svg>
+                <span>Gripper relative to part (T_part_grasp)</span>
+              </div>
+              <div class="relative-pose-grid">
+                <div class="relative-item"><span class="r-tag">X</span><span id="rel-pos-x" class="r-val">0.00</span></div>
+                <div class="relative-item"><span class="r-tag">Y</span><span id="rel-pos-y" class="r-val">0.00</span></div>
+                <div class="relative-item"><span class="r-tag">Z</span><span id="rel-pos-z" class="r-val">0.00</span></div>
+                <div class="relative-item"><span class="r-tag">Rx</span><span id="rel-rpy-r" class="r-val">0.0°</span></div>
+                <div class="relative-item"><span class="r-tag">Ry</span><span id="rel-rpy-p" class="r-val">0.0°</span></div>
+                <div class="relative-item"><span class="r-tag">Rz</span><span id="rel-rpy-y" class="r-val">0.0°</span></div>
               </div>
             </div>
 
@@ -470,6 +488,22 @@ export class GripperPanel {
     if (inpR && document.activeElement !== inpR) inpR.value = this.state.rpy.roll.toFixed(1);
     if (inpP && document.activeElement !== inpP) inpP.value = this.state.rpy.pitch.toFixed(1);
     if (inpYaw && document.activeElement !== inpYaw) inpYaw.value = this.state.rpy.yaw.toFixed(1);
+
+    // Update read-only Gripper relative to part readout
+    const relX = this.container.querySelector('#rel-pos-x');
+    const relY = this.container.querySelector('#rel-pos-y');
+    const relZ = this.container.querySelector('#rel-pos-z');
+    const relR = this.container.querySelector('#rel-rpy-r');
+    const relP = this.container.querySelector('#rel-rpy-p');
+    const relYaw = this.container.querySelector('#rel-rpy-y');
+
+    if (relX && this.state.relativePose) relX.textContent = this.state.relativePose.position.x.toFixed(2);
+    if (relY && this.state.relativePose) relY.textContent = this.state.relativePose.position.y.toFixed(2);
+    if (relZ && this.state.relativePose) relZ.textContent = this.state.relativePose.position.z.toFixed(2);
+
+    if (relR && this.state.relativeRpy) relR.textContent = `${this.state.relativeRpy.roll.toFixed(1)}°`;
+    if (relP && this.state.relativeRpy) relP.textContent = `${this.state.relativeRpy.pitch.toFixed(1)}°`;
+    if (relYaw && this.state.relativeRpy) relYaw.textContent = `${this.state.relativeRpy.yaw.toFixed(1)}°`;
 
     // Update parameters
     const inpOffset = this.container.querySelector<HTMLInputElement>('#inp-tcp-offset');

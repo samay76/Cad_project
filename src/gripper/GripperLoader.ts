@@ -29,6 +29,24 @@ export class GripperLoader {
       GRIPPER_CONFIG.unitScale
     );
 
+    // Wait until visual meshes have finished loading into links
+    await new Promise<void>((resolve) => {
+      let attempts = 0;
+      const check = () => {
+        let meshCount = 0;
+        robot.traverse((c) => {
+          if ((c as any).isMesh) meshCount++;
+        });
+        if (meshCount >= 9 || attempts > 100) {
+          resolve();
+        } else {
+          attempts++;
+          setTimeout(check, 30);
+        }
+      };
+      check();
+    });
+
     return new GripperModel(robot);
   }
 }
