@@ -1701,3 +1701,20 @@ html, body {
   color: var(--text-muted);
 }
 
+.slider-val-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.contact-block-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #fef2f2;
+  color: #ef4444;
+  border: 1px solid #fecaca;
+  white-space: nowrap;
+}
+

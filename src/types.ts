@@ -90,12 +90,22 @@ export interface SavedGrasp {
   partName?: string;
 }
 
-export type TestPhase = 'idle' | 'pre-grasp' | 'approach' | 'close' | 'lift';
+export type TestPhase =
+  | 'idle'
+  | 'pre-grasp'
+  | 'approach'
+  | 'close'
+  | 'lift'
+  | 'transfer'
+  | 'place'
+  | 'release'
+  | 'retract';
 
 export interface GripperState {
   loaded: boolean;
   visible: boolean;
   openingWidth: number; // mm
+  contactWidth?: number; // detected workpiece grasp thickness in mm
   tcpOffset: number; // mm
   preGraspDistance: number; // mm
   pose: Pose; // T_part_grasp in mm

@@ -236,11 +236,11 @@ export class AppLayout {
 
               <div class="toolbar-divider"></div>
 
-              <button id="tb-btn-test" class="tb-btn tb-btn-primary" title="Test Grasp Sequence">
+              <button id="tb-btn-test" class="tb-btn tb-btn-primary" title="Run Cobot Pick & Place Sequence: Approach, Clamp on surface, Lift CAD model, Place and Release">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <polygon points="5 3 19 12 5 21 5 3"/>
                 </svg>
-                <span>Test Grasp</span>
+                <span>Pick & Place</span>
               </button>
 
               <button id="tb-btn-stop" class="tb-btn tb-btn-danger" title="Stop Test Sequence" disabled>

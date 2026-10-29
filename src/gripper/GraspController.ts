@@ -17,6 +17,7 @@ export class GraspController {
 
   private preGraspDistance = GRIPPER_CONFIG.defaultPreGraspDistance;
   private onStateChange: GripperStateCallback | null = null;
+  private lastDetectedContactWidth = 0;
 
   // Animation test sequence state
   private isTesting = false;
@@ -27,6 +28,8 @@ export class GraspController {
     quaternion: THREE.Quaternion;
     openingWidth: number;
   } | null = null;
+  private savedCadPosBeforeTest: THREE.Vector3 | null = null;
+  private savedCadQuatBeforeTest: THREE.Quaternion | null = null;
 
   // Keyboard shortcut listener
   private boundKeyDown: (e: KeyboardEvent) => void;
@@ -63,7 +66,6 @@ export class GraspController {
 
     // Keyboard shortcuts: T for Translate, R for Rotate
     this.boundKeyDown = (e: KeyboardEvent) => {
-      // Do not trigger if typing in an input or textarea
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
         return;
       }
@@ -81,6 +83,7 @@ export class GraspController {
 
   public setCadPartsRoot(root: THREE.Group | null) {
     this.cadPartsRoot = root;
+    this.updateContactWidth();
     this.checkCollisions();
   }
 
@@ -104,15 +107,29 @@ export class GraspController {
   }
 
   private handleGizmoMove() {
+    // If gripper palm penetrates into CAD part, resolve standoff so it doesn't clip inside
+    CollisionChecker.resolveApproachStandoff(this.gripperModel, this.cadPartsRoot, 10);
+    this.updateContactWidth();
     this.checkCollisions();
     this.notifyState();
   }
 
+  private updateContactWidth() {
+    this.lastDetectedContactWidth = CollisionChecker.findGraspContactWidth(
+      this.gripperModel,
+      this.cadPartsRoot
+    );
+  }
+
   /**
    * Snaps TCP to clicked surface point with approach Z pointing into surface (Z = -normal)
+   * Prevents gripper from penetrating inside the CAD model.
    */
-  public snapToClickedPoint(point: { x: number; y: number; z: number }, normal: { x: number; y: number; z: number }) {
-    // 1. Position TCP directly on the clicked surface point
+  public snapToClickedPoint(
+    point: { x: number; y: number; z: number },
+    normal: { x: number; y: number; z: number }
+  ) {
+    // 1. Position TCP at the clicked surface point
     this.gripperModel.root.position.set(point.x, point.y, point.z);
 
     // 2. Approach direction: pointing INTO surface (Z = -normal)
@@ -129,6 +146,10 @@ export class GraspController {
     this.gripperModel.root.quaternion.copy(quat);
     this.gripperModel.root.updateMatrixWorld(true);
 
+    // 3. Contact blocking: ensure the gripper body/palm does NOT penetrate inside the CAD model
+    CollisionChecker.resolveApproachStandoff(this.gripperModel, this.cadPartsRoot, 80);
+
+    this.updateContactWidth();
     this.checkCollisions();
     this.notifyState();
   }
@@ -139,6 +160,8 @@ export class GraspController {
   public flipApproach() {
     this.gripperModel.root.rotateX(Math.PI);
     this.gripperModel.root.updateMatrixWorld(true);
+    CollisionChecker.resolveApproachStandoff(this.gripperModel, this.cadPartsRoot, 80);
+    this.updateContactWidth();
     this.checkCollisions();
     this.notifyState();
   }
@@ -150,16 +173,23 @@ export class GraspController {
     const rad = THREE.MathUtils.degToRad(degrees);
     this.gripperModel.root.rotateZ(rad);
     this.gripperModel.root.updateMatrixWorld(true);
+    CollisionChecker.resolveApproachStandoff(this.gripperModel, this.cadPartsRoot, 40);
+    this.updateContactWidth();
     this.checkCollisions();
     this.notifyState();
   }
 
   /**
-   * Translates along part axis by delta in mm
+   * Translates along part axis by delta in mm with contact boundary resolution
    */
   public stepTranslate(axis: 'x' | 'y' | 'z', deltaMm: number) {
     this.gripperModel.root.position[axis] += deltaMm;
     this.gripperModel.root.updateMatrixWorld(true);
+
+    // If body penetrates CAD part, push back to contact surface
+    CollisionChecker.resolveApproachStandoff(this.gripperModel, this.cadPartsRoot, Math.abs(deltaMm) + 10);
+
+    this.updateContactWidth();
     this.checkCollisions();
     this.notifyState();
   }
@@ -173,6 +203,9 @@ export class GraspController {
     if (axis === 'y') this.gripperModel.root.rotateY(rad);
     if (axis === 'z') this.gripperModel.root.rotateZ(rad);
     this.gripperModel.root.updateMatrixWorld(true);
+
+    CollisionChecker.resolveApproachStandoff(this.gripperModel, this.cadPartsRoot, 30);
+    this.updateContactWidth();
     this.checkCollisions();
     this.notifyState();
   }
@@ -192,18 +225,31 @@ export class GraspController {
     this.gripperModel.root.quaternion.setFromEuler(euler);
     this.gripperModel.root.updateMatrixWorld(true);
 
+    CollisionChecker.resolveApproachStandoff(this.gripperModel, this.cadPartsRoot, 60);
+    this.updateContactWidth();
     this.checkCollisions();
     this.notifyState();
   }
 
+  /**
+   * Closes or opens fingers. If CAD part is between fingers, stops at contact width.
+   */
   public setOpeningWidth(widthMm: number) {
-    this.gripperModel.setOpeningWidth(widthMm);
+    this.updateContactWidth();
+    let clampedWidth = widthMm;
+    if (this.lastDetectedContactWidth > 0 && widthMm < this.lastDetectedContactWidth) {
+      clampedWidth = this.lastDetectedContactWidth;
+    }
+
+    this.gripperModel.setOpeningWidth(clampedWidth);
     this.checkCollisions();
     this.notifyState();
   }
 
   public setTcpOffset(offsetMm: number) {
     this.gripperModel.setTcpOffset(offsetMm);
+    CollisionChecker.resolveApproachStandoff(this.gripperModel, this.cadPartsRoot, 60);
+    this.updateContactWidth();
     this.checkCollisions();
     this.notifyState();
   }
@@ -217,8 +263,7 @@ export class GraspController {
     if (this.cadPartsRoot) {
       const box = new THREE.Box3().setFromObject(this.cadPartsRoot);
       const center = box.getCenter(new THREE.Vector3());
-      const size = box.getSize(new THREE.Vector3());
-      // Position above part looking down along -Z
+      // Position cleanly above part looking down along -Z
       this.gripperModel.root.position.set(center.x, center.y, box.max.z + 50);
       this.gripperModel.root.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
     } else {
@@ -228,13 +273,11 @@ export class GraspController {
 
     this.gripperModel.setOpeningWidth(GRIPPER_CONFIG.defaultOpeningWidth);
     this.gripperModel.root.updateMatrixWorld(true);
+    this.updateContactWidth();
     this.checkCollisions();
     this.notifyState();
   }
 
-  /**
-   * Check for collisions with CAD part meshes
-   */
   public checkCollisions(): boolean {
     const res = CollisionChecker.checkCollision(
       this.gripperModel.getAllMeshes(),
@@ -245,12 +288,16 @@ export class GraspController {
   }
 
   /**
-   * Runs the animated test grasp sequence:
-   * 1. Pre-grasp (retract along -Z, open fingers)
-   * 2. Approach (move along +Z to grasp pose)
-   * 3. Close (close fingers)
-   * 4. Lift (retract back to pre-grasp)
-   * 5. Restore editable pose
+   * Runs the full animated Pick & Place sequence:
+   * 1. Pre-grasp: Standoff at preGraspDistance with fingers open
+   * 2. Approach: Linear approach along +Z (blocked at CAD surface)
+   * 3. Close: Clamp on CAD part surface (stopping at contact width)
+   * 4. Lift: PICK UP THE CAD MODEL into the air!
+   * 5. Transfer: Carry CAD model to place location
+   * 6. Place: Lower CAD model onto table/ground
+   * 7. Release: Open fingers
+   * 8. Retract: Retract gripper back to safe standoff
+   * 9. Restore: Smoothly return CAD model and gripper to editable poses
    */
   public testGrasp() {
     if (this.isTesting) return;
@@ -259,94 +306,160 @@ export class GraspController {
     this.transformControls.enabled = false;
     this.transformControls.getHelper().visible = false;
 
-    // Save initial editable grasp pose
+    // Save initial editable grasp pose and CAD model initial position
     this.savedPoseBeforeTest = {
       position: this.gripperModel.root.position.clone(),
       quaternion: this.gripperModel.root.quaternion.clone(),
       openingWidth: this.gripperModel.getOpeningWidth()
     };
 
-    const graspPos = this.savedPoseBeforeTest.position.clone();
-    const graspQuat = this.savedPoseBeforeTest.quaternion.clone();
-    const targetWidth = this.savedPoseBeforeTest.openingWidth;
+    if (this.cadPartsRoot) {
+      this.savedCadPosBeforeTest = this.cadPartsRoot.position.clone();
+      this.savedCadQuatBeforeTest = this.cadPartsRoot.quaternion.clone();
+    }
+
+    // 1. Ensure grasp pose is blocked on surface and does not penetrate inside CAD solid
+    CollisionChecker.resolveApproachStandoff(this.gripperModel, this.cadPartsRoot, 80);
+    const graspPos = this.gripperModel.root.position.clone();
+    const graspQuat = this.gripperModel.root.quaternion.clone();
+
+    // 2. Find exact workpiece contact width so fingers clamp on surface without penetrating
+    const contactWidth = CollisionChecker.findGraspContactWidth(
+      this.gripperModel,
+      this.cadPartsRoot
+    );
+    const clampedTargetWidth =
+      contactWidth > 0
+        ? contactWidth
+        : Math.min(this.savedPoseBeforeTest.openingWidth, 0);
+
+    this.lastDetectedContactWidth = contactWidth;
 
     // Approach vector in world coordinates (+Z of TCP)
     const approachVec = new THREE.Vector3(0, 0, 1).applyQuaternion(graspQuat).normalize();
     const preGraspPos = graspPos.clone().addScaledVector(approachVec, -this.preGraspDistance);
 
+    // Pick & Lift target: lifts 80mm vertically along world Z
+    const liftOffset = new THREE.Vector3(0, 0, 80);
+    const liftPos = graspPos.clone().add(liftOffset);
+
+    // Place location (transferred +70mm in X)
+    const transferOffset = new THREE.Vector3(70, 0, 80);
+    const transferPos = graspPos.clone().add(transferOffset);
+    const placePos = graspPos.clone().add(new THREE.Vector3(70, 0, 0));
+
     const startTime = performance.now();
     const phaseDurations = {
-      preGrasp: 800,  // ms
-      approach: 1000, // ms
-      close: 600,     // ms
-      lift: 900       // ms
+      preGrasp: 700,   // ms: retract & open
+      approach: 900,   // ms: approach to contact boundary
+      close: 600,      // ms: clamp on CAD part surface
+      lift: 900,       // ms: PICK UP CAD MODEL into the air!
+      transfer: 800,   // ms: carry CAD model horizontally
+      place: 700,      // ms: place down on table
+      release: 500,    // ms: release fingers
+      retract: 700     // ms: lift gripper alone back to clearance
     };
 
-    const totalDuration =
-      phaseDurations.preGrasp +
-      phaseDurations.approach +
-      phaseDurations.close +
-      phaseDurations.lift;
+    const tPreGrasp = phaseDurations.preGrasp;
+    const tApproach = tPreGrasp + phaseDurations.approach;
+    const tClose = tApproach + phaseDurations.close;
+    const tLift = tClose + phaseDurations.lift;
+    const tTransfer = tLift + phaseDurations.transfer;
+    const tPlace = tTransfer + phaseDurations.place;
+    const tRelease = tPlace + phaseDurations.release;
+    const totalDuration = tRelease + phaseDurations.retract;
 
     const animateStep = (now: number) => {
       if (!this.isTesting) return;
 
       const elapsed = now - startTime;
 
-      if (elapsed < phaseDurations.preGrasp) {
-        // Phase 1: Pre-Grasp (open fingers and move to pre-grasp position)
+      if (elapsed < tPreGrasp) {
+        // Phase 1: Pre-Grasp (open fingers and move to standoff)
         this.testPhase = 'pre-grasp';
         const t = Math.min(elapsed / phaseDurations.preGrasp, 1);
         const ease = 1 - Math.pow(1 - t, 2);
         this.gripperModel.root.position.lerpVectors(graspPos, preGraspPos, ease);
         this.gripperModel.setOpeningWidth(
-          THREE.MathUtils.lerp(targetWidth, GRIPPER_CONFIG.maxOpeningWidth, ease)
+          THREE.MathUtils.lerp(clampedTargetWidth, GRIPPER_CONFIG.maxOpeningWidth, ease)
         );
-      } else if (elapsed < phaseDurations.preGrasp + phaseDurations.approach) {
-        // Phase 2: Approach (move linearly into grasp position)
+      } else if (elapsed < tApproach) {
+        // Phase 2: Approach (move linearly into grasp pose, stopping at contact boundary)
         this.testPhase = 'approach';
-        const t = Math.min(
-          (elapsed - phaseDurations.preGrasp) / phaseDurations.approach,
-          1
-        );
-        const ease = t * t * (3 - 2 * t); // smoothstep
+        const t = Math.min((elapsed - tPreGrasp) / phaseDurations.approach, 1);
+        const ease = t * t * (3 - 2 * t);
         this.gripperModel.root.position.lerpVectors(preGraspPos, graspPos, ease);
         this.gripperModel.setOpeningWidth(GRIPPER_CONFIG.maxOpeningWidth);
-      } else if (
-        elapsed <
-        phaseDurations.preGrasp + phaseDurations.approach + phaseDurations.close
-      ) {
-        // Phase 3: Close fingers onto part
+      } else if (elapsed < tClose) {
+        // Phase 3: Close (clamp fingers on CAD part surface, stopping at contact width)
         this.testPhase = 'close';
-        const t = Math.min(
-          (elapsed - phaseDurations.preGrasp - phaseDurations.approach) /
-            phaseDurations.close,
-          1
-        );
+        const t = Math.min((elapsed - tApproach) / phaseDurations.close, 1);
         const ease = 1 - Math.pow(1 - t, 2);
         this.gripperModel.root.position.copy(graspPos);
         this.gripperModel.setOpeningWidth(
-          THREE.MathUtils.lerp(GRIPPER_CONFIG.maxOpeningWidth, targetWidth, ease)
+          THREE.MathUtils.lerp(GRIPPER_CONFIG.maxOpeningWidth, clampedTargetWidth, ease)
+        );
+      } else if (elapsed < tLift) {
+        // Phase 4: Lift (PICK UP THE CAD MODEL!)
+        this.testPhase = 'lift';
+        const t = Math.min((elapsed - tClose) / phaseDurations.lift, 1);
+        const ease = t * t * (3 - 2 * t);
+        this.gripperModel.root.position.lerpVectors(graspPos, liftPos, ease);
+        this.gripperModel.setOpeningWidth(clampedTargetWidth);
+
+        // CAD MODEL LIFTS WITH THE GRIPPER!
+        if (this.cadPartsRoot && this.savedCadPosBeforeTest) {
+          const delta = this.gripperModel.root.position.clone().sub(graspPos);
+          this.cadPartsRoot.position.copy(this.savedCadPosBeforeTest).add(delta);
+          this.cadPartsRoot.updateMatrixWorld(true);
+        }
+      } else if (elapsed < tTransfer) {
+        // Phase 5: Transfer (carry CAD model horizontally)
+        this.testPhase = 'transfer';
+        const t = Math.min((elapsed - tLift) / phaseDurations.transfer, 1);
+        const ease = t * t * (3 - 2 * t);
+        this.gripperModel.root.position.lerpVectors(liftPos, transferPos, ease);
+        this.gripperModel.setOpeningWidth(clampedTargetWidth);
+
+        if (this.cadPartsRoot && this.savedCadPosBeforeTest) {
+          const delta = this.gripperModel.root.position.clone().sub(graspPos);
+          this.cadPartsRoot.position.copy(this.savedCadPosBeforeTest).add(delta);
+          this.cadPartsRoot.updateMatrixWorld(true);
+        }
+      } else if (elapsed < tPlace) {
+        // Phase 6: Place (lower CAD model down to resting surface)
+        this.testPhase = 'place';
+        const t = Math.min((elapsed - tTransfer) / phaseDurations.place, 1);
+        const ease = t * t * (3 - 2 * t);
+        this.gripperModel.root.position.lerpVectors(transferPos, placePos, ease);
+        this.gripperModel.setOpeningWidth(clampedTargetWidth);
+
+        if (this.cadPartsRoot && this.savedCadPosBeforeTest) {
+          const delta = this.gripperModel.root.position.clone().sub(graspPos);
+          this.cadPartsRoot.position.copy(this.savedCadPosBeforeTest).add(delta);
+          this.cadPartsRoot.updateMatrixWorld(true);
+        }
+      } else if (elapsed < tRelease) {
+        // Phase 7: Release (open fingers, releasing CAD model)
+        this.testPhase = 'release';
+        const t = Math.min((elapsed - tPlace) / phaseDurations.release, 1);
+        const ease = 1 - Math.pow(1 - t, 2);
+        this.gripperModel.root.position.copy(placePos);
+        this.gripperModel.setOpeningWidth(
+          THREE.MathUtils.lerp(clampedTargetWidth, GRIPPER_CONFIG.maxOpeningWidth, ease)
         );
       } else if (elapsed < totalDuration) {
-        // Phase 4: Lift back to pre-grasp
-        this.testPhase = 'lift';
-        const t = Math.min(
-          (elapsed -
-            phaseDurations.preGrasp -
-            phaseDurations.approach -
-            phaseDurations.close) /
-            phaseDurations.lift,
-          1
-        );
+        // Phase 8: Retract (lift gripper alone back to clearance)
+        this.testPhase = 'retract';
+        const t = Math.min((elapsed - tRelease) / phaseDurations.retract, 1);
         const ease = t * t * (3 - 2 * t);
-        this.gripperModel.root.position.lerpVectors(graspPos, preGraspPos, ease);
-        this.gripperModel.setOpeningWidth(targetWidth);
+        this.gripperModel.root.position.lerpVectors(placePos, transferPos, ease);
+        this.gripperModel.setOpeningWidth(GRIPPER_CONFIG.maxOpeningWidth);
       } else {
-        // Completed: wait briefly and restore editable pose
+        // Sequence completed: brief pause to display placed result, then restore
         setTimeout(() => {
           this.stopTestGrasp();
-        }, 400);
+        }, 1200);
         return;
       }
 
@@ -377,9 +490,19 @@ export class GraspController {
       this.gripperModel.root.updateMatrixWorld(true);
     }
 
+    // Restore CAD model position
+    if (this.cadPartsRoot && this.savedCadPosBeforeTest) {
+      this.cadPartsRoot.position.copy(this.savedCadPosBeforeTest);
+      if (this.savedCadQuatBeforeTest) {
+        this.cadPartsRoot.quaternion.copy(this.savedCadQuatBeforeTest);
+      }
+      this.cadPartsRoot.updateMatrixWorld(true);
+    }
+
     this.transformControls.enabled = true;
     this.transformControls.getHelper().visible = true;
 
+    this.updateContactWidth();
     this.checkCollisions();
     this.notifyState();
   }
@@ -413,6 +536,10 @@ export class GraspController {
       loaded: true,
       visible: this.gripperModel.isVisible(),
       openingWidth: Number(this.gripperModel.getOpeningWidth().toFixed(1)),
+      contactWidth:
+        this.lastDetectedContactWidth > 0
+          ? Number(this.lastDetectedContactWidth.toFixed(1))
+          : undefined,
       tcpOffset: Number(this.gripperModel.getTcpOffset().toFixed(1)),
       preGraspDistance: Number(this.preGraspDistance.toFixed(1)),
       pose: tcpPose,

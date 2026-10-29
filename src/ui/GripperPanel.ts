@@ -65,16 +65,16 @@ export class GripperPanel {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polygon points="5 3 19 12 5 21 5 3"/>
               </svg>
-              <span>Test Grasp Motion</span>
+              <span>Pick & Place Motion</span>
               <span id="test-phase-badge" class="test-phase-badge">Idle</span>
             </div>
 
             <div class="test-buttons-row">
-              <button id="btn-test-grasp" class="btn btn-primary btn-test">
+              <button id="btn-test-grasp" class="btn btn-primary btn-test" title="Run Pick & Place sequence: Approach, Clamp on surface, Lift CAD model, Place and Release">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <polygon points="5 3 19 12 5 21 5 3"/>
                 </svg>
-                <span>Test Grasp</span>
+                <span>Run Pick & Place</span>
               </button>
               <button id="btn-stop-test" class="btn btn-secondary btn-test" disabled>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -252,7 +252,10 @@ export class GripperPanel {
             <div class="slider-control-group">
               <div class="slider-header">
                 <span class="sub-label">Opening Width:</span>
-                <span id="label-opening-width" class="slider-value mono">85.0 mm</span>
+                <div class="slider-val-wrap">
+                  <span id="label-contact-block" class="contact-block-badge" style="display:none"></span>
+                  <span id="label-opening-width" class="slider-value mono">85.0 mm</span>
+                </div>
               </div>
               <input type="range" id="slider-opening" min="0" max="85" step="0.5" value="85" class="range-slider" />
               <div class="slider-quick-buttons">
@@ -315,10 +318,14 @@ export class GripperPanel {
     if (phaseBadge) {
       const phaseLabels: Record<string, string> = {
         idle: 'Idle',
-        'pre-grasp': 'Pre-Grasp (Retract)',
-        approach: 'Approach (Linear)',
-        close: 'Close Fingers',
-        lift: 'Lift'
+        'pre-grasp': 'Pre-Grasp (Standoff)',
+        approach: 'Approach (Blocked at Surface)',
+        close: 'Clamp (Contact Boundary)',
+        lift: 'Lift (Model Picked!)',
+        transfer: 'Transfer (Carrying Part)',
+        place: 'Place (Lowering to Table)',
+        release: 'Release (Fingers Open)',
+        retract: 'Retract'
       };
       phaseBadge.textContent = phaseLabels[this.state.testPhase] || this.state.testPhase;
       phaseBadge.classList.toggle('active', this.state.isTesting);
@@ -326,9 +333,19 @@ export class GripperPanel {
     if (testBtn) testBtn.disabled = this.state.isTesting;
     if (stopBtn) stopBtn.disabled = !this.state.isTesting;
 
-    // Update Opening Slider
+    // Update Opening Slider & Contact Block Badge
     const slider = this.container.querySelector<HTMLInputElement>('#slider-opening');
     const widthLabel = this.container.querySelector('#label-opening-width');
+    const contactBlockBadge = this.container.querySelector<HTMLElement>('#label-contact-block');
+
+    if (contactBlockBadge) {
+      if (this.state.contactWidth && this.state.contactWidth > 0) {
+        contactBlockBadge.style.display = 'inline-block';
+        contactBlockBadge.textContent = `Blocked at ${this.state.contactWidth.toFixed(1)}mm`;
+      } else {
+        contactBlockBadge.style.display = 'none';
+      }
+    }
     if (slider && document.activeElement !== slider) {
       slider.value = this.state.openingWidth.toString();
     }

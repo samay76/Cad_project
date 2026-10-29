@@ -23,6 +23,8 @@ export class GripperModel {
   private isColliding = false;
 
   private allMeshes: THREE.Mesh[] = [];
+  private fingerTipMeshes: THREE.Mesh[] = [];
+  private bodyMeshes: THREE.Mesh[] = [];
   private originalMaterials: Map<THREE.Mesh, THREE.Material | THREE.Material[]> = new Map();
   private collisionMaterial: THREE.MeshStandardMaterial;
 
@@ -47,6 +49,26 @@ export class GripperModel {
         if (child.material instanceof THREE.MeshStandardMaterial || child.material instanceof THREE.MeshPhongMaterial) {
           child.material.side = THREE.DoubleSide;
         }
+      }
+    });
+
+    // Categorize fingertip contact pads vs body meshes
+    const leftTip = this.robot.links['robotiq_85_left_finger_tip_link'];
+    const rightTip = this.robot.links['robotiq_85_right_finger_tip_link'];
+    if (leftTip) {
+      leftTip.traverse((c) => {
+        if (c instanceof THREE.Mesh) this.fingerTipMeshes.push(c);
+      });
+    }
+    if (rightTip) {
+      rightTip.traverse((c) => {
+        if (c instanceof THREE.Mesh) this.fingerTipMeshes.push(c);
+      });
+    }
+
+    this.allMeshes.forEach((m) => {
+      if (!this.fingerTipMeshes.includes(m)) {
+        this.bodyMeshes.push(m);
       }
     });
 
@@ -170,6 +192,14 @@ export class GripperModel {
 
   public getAllMeshes(): THREE.Mesh[] {
     return this.allMeshes;
+  }
+
+  public getFingerTipMeshes(): THREE.Mesh[] {
+    return this.fingerTipMeshes;
+  }
+
+  public getBodyMeshes(): THREE.Mesh[] {
+    return this.bodyMeshes;
   }
 
   public getRobot(): URDFRobot {
