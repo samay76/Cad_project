@@ -93,12 +93,12 @@ nferent_cad/
 │       ├── cube.stp, cube.stl, cube.obj
 ├── src/
 │   ├── main.ts                    # Main orchestrator: wires viewer, layout, gripper, controller, storage
-│   ├── config.ts                  # Centralized constants: GRIPPER_CONFIG, unitScale (1000.0)
+│   ├── config.ts                  # Centralized constants: GRIPPER_CONFIG, unitScale (1000.0), urdfFile
 │   ├── types.ts                   # Core data interfaces: Pose, SavedGrasp, GripperState, PartInfo
 │   ├── styles.css                 # Industrial light-theme design system (8px grid, status badges)
 │   ├── gripper/
-│   │   ├── GripperModel.ts        # Robotiq 2F-85 Three.js scene graph, TCP frame, finger kinematics
-│   │   ├── GripperLoader.ts       # Fetches 13 STLs, converts meters to mm, builds kinematic links
+│   │   ├── GripperModel.ts        # Robotiq 2F-85 URDF scene graph, TCP frame, mimic joint kinematics
+│   │   ├── GripperLoader.ts       # Loads URDF via urdf-loader, resolves package:// meshes, applies unit scale
 │   │   ├── GraspController.ts     # TransformControls, snapping, flipping, jogging, animated test sequence
 │   │   └── collision.ts           # Box3 and bounding-sphere CAD interference detection
 │   ├── ui/
@@ -161,13 +161,22 @@ When a user clicks on the CAD model, raycasting retrieves point $\vec{P}_{\text{
 3. **Flip Approach**: Rotates $180^\circ$ ($\pi$ rad) around local $X_{\text{TCP}}$, reversing the grasp direction.
 4. **Spin Approach**: Rotates $\pm 15^\circ$ or $\pm 90^\circ$ around local $Z_{\text{TCP}}$ to align finger pads with the workpiece.
 
-### D. Kinematic Finger Articulation
-The Robotiq 2F-85 finger kinematics are parameterized by opening width $w \in [0, 85]\text{ mm}$:
-- Closing ratio: $r = \frac{85 - w}{85} \in [0, 1]$.
-- Lateral displacement: $\Delta x = r \times 42.5\text{ mm}$.
-- Inward rotation: $\theta = r \times 0.72\text{ rad}$ ($\approx 41.2^\circ$).
-- Left finger translates by $+\Delta x$ with rotation $-0.5\theta$.
-- Right finger translates by $-\Delta x$ with rotation $+0.5\theta$.
+### D. Kinematic Finger Articulation (Official URDF 4-Bar Linkage)
+The Robotiq 2F-85 gripper uses the official ROS `robotiq_description` URDF kinematic model loaded via `urdf-loader`.
+All joints and links maintain complete structural integrity (no detached or floating links):
+- **Base Link (`robotiq_85_base_link`)**: Rigid mounting frame at $(0, 0, 0)$.
+- **Driving Joint (`robotiq_85_left_knuckle_joint`)**: Revolute joint on the base, rotating around axis $(0, -1, 0)$ with range $\theta \in [0.0, 0.8]\text{ rad}$:
+  $$\theta = \left(1.0 - \frac{w}{85.0}\right) \times 0.8\text{ rad}$$
+  where $w \in [0, 85]\text{ mm}$ is the opening width.
+  - $w = 85.0\text{ mm}$ (fully open) $\implies \theta = 0.0\text{ rad}$.
+  - $w = 0.0\text{ mm}$ (fully closed) $\implies \theta = 0.8\text{ rad}$.
+- **Kinematically Coupled Mimic Joints**:
+  - `robotiq_85_right_knuckle_joint`: Multiplier $-1.0 \implies -\theta$.
+  - `robotiq_85_left_inner_knuckle_joint`: Multiplier $+1.0 \implies +\theta$.
+  - `robotiq_85_right_inner_knuckle_joint`: Multiplier $-1.0 \implies -\theta$.
+  - `robotiq_85_left_finger_tip_joint`: Multiplier $-1.0 \implies -\theta$ (keeps left finger pad parallel).
+  - `robotiq_85_right_finger_tip_joint`: Multiplier $+1.0 \implies +\theta$ (keeps right finger pad parallel).
+- **Zero Detachment**: All 8 moving linkage parts remain physically pinned to each other and to the base at their exact revolute joint origins.
 
 ### E. Animated "Test Grasp" Motion Sequence
 The test motion verifies feasibility and clearance:

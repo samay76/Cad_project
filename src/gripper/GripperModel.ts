@@ -1,22 +1,6 @@
 import * as THREE from 'three';
+import type { URDFRobot } from 'urdf-loader';
 import { GRIPPER_CONFIG } from '../config';
-
-export interface GripperMeshes {
-  base: THREE.Mesh;
-  baseCoupling?: THREE.Mesh;
-  collar?: THREE.Mesh;
-  leftDriver: THREE.Mesh;
-  leftCoupler: THREE.Mesh;
-  leftFollower: THREE.Mesh;
-  leftSpringLink: THREE.Mesh;
-  leftTongue?: THREE.Mesh;
-  rightDriver: THREE.Mesh;
-  rightCoupler: THREE.Mesh;
-  rightFollower: THREE.Mesh;
-  rightSpringLink: THREE.Mesh;
-  rightTongue?: THREE.Mesh;
-  allMeshes: THREE.Mesh[];
-}
 
 export class GripperModel {
   // Master root group located at the TCP (Tool Center Point)
@@ -25,9 +9,8 @@ export class GripperModel {
   // Subgroup offset by tcpOffset along -Z
   private bodyGroup: THREE.Group;
 
-  // Finger kinematic groups
-  private leftFingerGroup: THREE.Group;
-  private rightFingerGroup: THREE.Group;
+  // URDF Robot instance
+  private robot: URDFRobot;
 
   // Visual frame helpers
   private tcpAxesHelper: THREE.AxesHelper;
@@ -43,7 +26,7 @@ export class GripperModel {
   private originalMaterials: Map<THREE.Mesh, THREE.Material | THREE.Material[]> = new Map();
   private collisionMaterial: THREE.MeshStandardMaterial;
 
-  constructor(meshes: GripperMeshes) {
+  constructor(robot: URDFRobot) {
     this.root = new THREE.Group();
     this.root.name = 'Robotiq_2F85_TCP';
 
@@ -51,12 +34,21 @@ export class GripperModel {
     this.bodyGroup.name = 'GripperBody';
     this.root.add(this.bodyGroup);
 
-    this.allMeshes = meshes.allMeshes;
+    this.robot = robot;
+    this.bodyGroup.add(this.robot);
 
-    // Cache original materials
-    for (const mesh of this.allMeshes) {
-      this.originalMaterials.set(mesh, mesh.material);
-    }
+    // Cache original materials and collect all meshes for raycasting & collision
+    this.robot.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        this.allMeshes.push(child);
+        this.originalMaterials.set(child, child.material);
+
+        // Ensure materials display nicely under Three.js lighting
+        if (child.material instanceof THREE.MeshStandardMaterial || child.material instanceof THREE.MeshPhongMaterial) {
+          child.material.side = THREE.DoubleSide;
+        }
+      }
+    });
 
     this.collisionMaterial = new THREE.MeshStandardMaterial({
       color: GRIPPER_CONFIG.collisionColor,
@@ -66,32 +58,7 @@ export class GripperModel {
       metalness: 0.1
     });
 
-    // 1. Add base housing to bodyGroup
-    this.bodyGroup.add(meshes.base);
-    if (meshes.baseCoupling) this.bodyGroup.add(meshes.baseCoupling);
-    if (meshes.collar) this.bodyGroup.add(meshes.collar);
-
-    // 2. Setup Left Finger Group
-    this.leftFingerGroup = new THREE.Group();
-    this.leftFingerGroup.name = 'LeftFinger';
-    this.leftFingerGroup.add(meshes.leftDriver);
-    this.leftFingerGroup.add(meshes.leftCoupler);
-    this.leftFingerGroup.add(meshes.leftFollower);
-    this.leftFingerGroup.add(meshes.leftSpringLink);
-    if (meshes.leftTongue) this.leftFingerGroup.add(meshes.leftTongue);
-    this.bodyGroup.add(this.leftFingerGroup);
-
-    // 3. Setup Right Finger Group
-    this.rightFingerGroup = new THREE.Group();
-    this.rightFingerGroup.name = 'RightFinger';
-    this.rightFingerGroup.add(meshes.rightDriver);
-    this.rightFingerGroup.add(meshes.rightCoupler);
-    this.rightFingerGroup.add(meshes.rightFollower);
-    this.rightFingerGroup.add(meshes.rightSpringLink);
-    if (meshes.rightTongue) this.rightFingerGroup.add(meshes.rightTongue);
-    this.bodyGroup.add(this.rightFingerGroup);
-
-    // 4. Setup TCP Frame Visual Helpers (RGB axes + Approach Arrow)
+    // 1. Setup TCP Frame Visual Helpers (RGB axes + Approach Arrow + Sphere)
     this.tcpAxesHelper = new THREE.AxesHelper(30);
     this.tcpAxesHelper.renderOrder = 10;
     this.root.add(this.tcpAxesHelper);
@@ -116,7 +83,7 @@ export class GripperModel {
     this.tcpCenterSphere.renderOrder = 11;
     this.root.add(this.tcpCenterSphere);
 
-    // Initial positioning
+    // Initial positioning & finger joint configuration
     this.updateTcpOffset();
     this.setOpeningWidth(this.openingWidth);
   }
@@ -134,12 +101,14 @@ export class GripperModel {
   }
 
   private updateTcpOffset() {
-    // Offset the gripper body along -Z so the TCP (0,0,0) is at the fingertip center
+    // In URDF, the mounting flange is at (0,0,0) and fingers extend in +Z.
+    // Offsetting the body along -Z aligns fingertips at the TCP (0, 0, 0)
+    // with +Z pointing forward out of the gripper.
     this.bodyGroup.position.set(0, 0, -this.tcpOffset);
   }
 
   /**
-   * Adjusts finger opening width in millimeters [0 to 85 mm]
+   * Adjusts finger opening width in millimeters [0 to 85 mm] using URDF kinematic joints
    */
   public setOpeningWidth(widthMm: number) {
     this.openingWidth = Math.max(
@@ -147,22 +116,31 @@ export class GripperModel {
       Math.min(GRIPPER_CONFIG.maxOpeningWidth, widthMm)
     );
 
-    // Normalizing ratio: 0 (fully open 85mm) to 1 (fully closed 0mm)
-    const closeRatio = (GRIPPER_CONFIG.maxOpeningWidth - this.openingWidth) / GRIPPER_CONFIG.maxOpeningWidth;
+    // In Robotiq 2F-85 URDF:
+    // angle 0.0 rad = fully open (85 mm)
+    // angle 0.8 rad = fully closed (0 mm)
+    const angle = (1.0 - (this.openingWidth / GRIPPER_CONFIG.maxOpeningWidth)) * 0.8;
 
-    // Lateral displacement of fingers (max delta ~42.5mm per finger)
-    const dx = closeRatio * 42.5;
-
-    // Dynamic 4-bar linkage inward rotation
-    const rot = closeRatio * 0.72; // ~41 degrees
-
-    // Left finger moves in +X direction and rotates
-    this.leftFingerGroup.position.x = dx;
-    this.leftFingerGroup.rotation.y = -rot * 0.5;
-
-    // Right finger moves in -X direction and rotates symmetrically
-    this.rightFingerGroup.position.x = -dx;
-    this.rightFingerGroup.rotation.y = rot * 0.5;
+    // Set driving joint
+    if (this.robot.joints['robotiq_85_left_knuckle_joint']) {
+      this.robot.setJointValue('robotiq_85_left_knuckle_joint', angle);
+    }
+    // Set/confirm mimic joints
+    if (this.robot.joints['robotiq_85_right_knuckle_joint']) {
+      this.robot.setJointValue('robotiq_85_right_knuckle_joint', -angle);
+    }
+    if (this.robot.joints['robotiq_85_left_inner_knuckle_joint']) {
+      this.robot.setJointValue('robotiq_85_left_inner_knuckle_joint', angle);
+    }
+    if (this.robot.joints['robotiq_85_right_inner_knuckle_joint']) {
+      this.robot.setJointValue('robotiq_85_right_inner_knuckle_joint', -angle);
+    }
+    if (this.robot.joints['robotiq_85_left_finger_tip_joint']) {
+      this.robot.setJointValue('robotiq_85_left_finger_tip_joint', -angle);
+    }
+    if (this.robot.joints['robotiq_85_right_finger_tip_joint']) {
+      this.robot.setJointValue('robotiq_85_right_finger_tip_joint', angle);
+    }
   }
 
   public getOpeningWidth(): number {
@@ -192,6 +170,10 @@ export class GripperModel {
 
   public getAllMeshes(): THREE.Mesh[] {
     return this.allMeshes;
+  }
+
+  public getRobot(): URDFRobot {
+    return this.robot;
   }
 
   public setVisible(visible: boolean) {

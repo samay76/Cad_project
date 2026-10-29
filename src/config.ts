@@ -9,12 +9,15 @@ export const GRIPPER_CONFIG = {
   // Served URL path in Vite dev server
   baseUrl: '/gripper/',
 
+  // URDF specification file
+  urdfFile: 'robotiq_2f_85.urdf',
+
   /**
    * UNIT CONVERSION:
-   * The Robotiq 2F-85 description and STL meshes are modeled in METERS.
+   * The Robotiq 2F-85 URDF description and meshes are modeled in standard SI units (METERS).
    * The CAD models and our 3D viewer coordinate system operate in MILLIMETERS.
    * `unitScale` converts meters to millimeters (1.0 meter = 1000.0 millimeters).
-   * All geometry vertices and body offsets are scaled by this factor in a single place.
+   * The URDF robot root is scaled by this factor in a single place.
    */
   unitScale: 1000.0,
 
