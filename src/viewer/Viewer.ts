@@ -436,6 +436,26 @@ export class Viewer {
     this.selectionManager.clearSelection();
   }
 
+  public getCamera(): THREE.PerspectiveCamera {
+    return this.camera;
+  }
+
+  public getDomElement(): HTMLElement {
+    return this.renderer.domElement;
+  }
+
+  public getScene(): THREE.Scene {
+    return this.scene;
+  }
+
+  public getOrbitControls(): OrbitControls {
+    return this.controls;
+  }
+
+  public getModelRoot(): THREE.Group | null {
+    return this.modelRoot;
+  }
+
   private moveCameraTo(position: THREE.Vector3, target: THREE.Vector3, animate = true) {
     if (!animate) {
       this.camera.position.copy(position);

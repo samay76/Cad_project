@@ -71,3 +71,36 @@ export interface SelectionState {
   selectedPartName: string | null;
   clickedPoint: ClickedPointInfo | null;
 }
+
+export interface EulerAngles {
+  roll: number;  // degrees
+  pitch: number; // degrees
+  yaw: number;   // degrees
+}
+
+export interface SavedGrasp {
+  id: string;
+  name: string;
+  tcpPose: Pose; // T_part_grasp: Pose in part coordinate frame (mm + quaternion)
+  rpy: EulerAngles; // Roll, Pitch, Yaw in degrees for readability
+  openingWidth: number; // mm
+  preGraspDistance: number; // mm
+  tcpOffset: number; // mm
+  createdAt: number;
+  partName?: string;
+}
+
+export type TestPhase = 'idle' | 'pre-grasp' | 'approach' | 'close' | 'lift';
+
+export interface GripperState {
+  loaded: boolean;
+  visible: boolean;
+  openingWidth: number; // mm
+  tcpOffset: number; // mm
+  preGraspDistance: number; // mm
+  pose: Pose; // T_part_grasp in mm
+  rpy: EulerAngles;
+  hasCollision: boolean;
+  isTesting: boolean;
+  testPhase: TestPhase;
+}
