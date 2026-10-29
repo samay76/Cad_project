@@ -77,6 +77,13 @@ export class AppLayout {
                   </svg>
                 </button>
                 <div class="dropdown-menu" id="samples-dropdown-menu">
+                  <button class="dropdown-item" data-url="/samples/skf_cam_roller_305703_c-2z_0.stp" data-name="skf_cam_roller_305703_c-2z_0.stp">
+                    <span class="file-icon">⚙️</span>
+                    <div class="item-text">
+                      <span class="item-title">SKF Cam Roller (STEP)</span>
+                      <span class="item-desc">skf_cam_roller_305703_c-2z_0.stp</span>
+                    </div>
+                  </button>
                   <button class="dropdown-item" data-url="/samples/as1_pe_203.stp" data-name="as1_pe_203.stp">
                     <span class="file-icon">📦</span>
                     <div class="item-text">
