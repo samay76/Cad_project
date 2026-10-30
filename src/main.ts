@@ -9,7 +9,8 @@ import { GraspListView } from './ui/GraspList';
 import { GripperLoader } from './gripper/GripperLoader';
 import { GraspController } from './gripper/GraspController';
 import { PartController } from './part/PartController';
-import type { SavedGrasp, ClickedPointInfo, GripperState } from './types';
+import type { SavedGrasp, ClickedPointInfo, GripperState, TrajectorySample, GripMode, Pose } from './types';
+import { GRIPPERS, applyGripperSpec, getStoredGripperId, type GripperId } from './config';
 import './styles.css';
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -30,7 +31,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   // State
   let lastClickedPoint: ClickedPointInfo | null = null;
   let currentModelName = 'model.step';
+  let currentModelBuffer: ArrayBuffer | null = null;
   let savedGrasps: SavedGrasp[] = [];
+  let activeGripperId: GripperId = getStoredGripperId();
+  applyGripperSpec(GRIPPERS[activeGripperId]);
 
   // Persistence helpers
   const STORAGE_KEY = 'nferent_cad_saved_grasps';
@@ -65,6 +69,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     currentModelName = fileName;
     layout.setLoadedFileName(fileName);
     await viewer.loadFile(buffer, fileName);
+    currentModelBuffer = buffer.slice(0);
 
     const modelRoot = viewer.getModelRoot();
     if (partController) {
@@ -114,7 +119,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       preGraspDistance: state.preGraspDistance,
       tcpOffset: state.tcpOffset,
       createdAt: Date.now(),
-      partName: currentModelName
+      partName: currentModelName,
+      gripperId: activeGripperId
     };
 
     savedGrasps.push(newGrasp);
@@ -123,11 +129,157 @@ document.addEventListener('DOMContentLoaded', async () => {
     graspList?.setSelectedGraspId(newGrasp.id);
   };
 
+  // ---- Motion recording: the gripper path relative to the part, replayed by the MuJoCo simulation ----
+  const RECORD_INTERVAL_MS = 50;
+  const RECORD_MAX_SAMPLES = 3000;
+  let recordTimer: number | null = null;
+  let recordStart = 0;
+  let recordSamples: TrajectorySample[] = [];
+
+  const poseQuat = (p: Pose) =>
+    new THREE.Quaternion(p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w);
+  const poseDistMm = (a: Pose, b: Pose) =>
+    Math.hypot(a.position.x - b.position.x, a.position.y - b.position.y, a.position.z - b.position.z);
+  const poseAngleDeg = (a: Pose, b: Pose) => THREE.MathUtils.radToDeg(poseQuat(a).angleTo(poseQuat(b)));
+
+  const recordSample = () => {
+    if (!graspController) return;
+    const st = graspController.getCurrentState();
+    const pose: Pose = {
+      position: { ...st.relativePose.position },
+      orientation: { ...st.relativePose.orientation }
+    };
+    const last = recordSamples[recordSamples.length - 1];
+    if (
+      last &&
+      poseDistMm(last.pose, pose) < 0.2 &&
+      poseAngleDeg(last.pose, pose) < 0.2 &&
+      Math.abs(last.width - st.openingWidth) < 0.1
+    ) {
+      return; // nothing moved
+    }
+    recordSamples.push({ t: Date.now() - recordStart, pose, width: st.openingWidth });
+    graspList?.setRecording(true, recordSamples.length);
+    if (recordSamples.length >= RECORD_MAX_SAMPLES) {
+      layout?.showInfo('Recording', `Reached ${RECORD_MAX_SAMPLES} poses; recording stopped and saved.`);
+      stopRecording();
+    }
+  };
+
+  const startRecording = () => {
+    if (!graspController) {
+      layout?.showError('Load the gripper before recording a motion.', 'Recording');
+      return;
+    }
+    if (!viewer?.getModelRoot()) {
+      layout?.showError('Load the CAD part before recording a motion.', 'Recording');
+      return;
+    }
+    // The robot comes from above: an approach axis (TCP +Z) pointing up means the gripper is upside down.
+    const q = graspController.getCurrentState().pose.orientation;
+    const approach = new THREE.Vector3(0, 0, 1).applyQuaternion(new THREE.Quaternion(q.x, q.y, q.z, q.w));
+    if (approach.z > 0.3) {
+      layout?.showError(
+        'The gripper points UP (it comes from below the part). Press "Flip Approach (180°)" first so the ' +
+          'fingers point down at the part, then press Record again.',
+        'Recording'
+      );
+      return;
+    }
+    recordSamples = [];
+    recordStart = Date.now();
+    recordSample(); // starting pose
+    recordTimer = window.setInterval(recordSample, RECORD_INTERVAL_MS);
+    graspList?.setRecording(true, recordSamples.length);
+    layout?.showInfo(
+      'Recording gripper motion',
+      'Move the gripper to the part the way the robot should (gizmo or step buttons), set the finger ' +
+        'opening on the way, and finish at the grasp pose. Last, close the fingers on the part (outside ' +
+        'grip) or open them against the inner wall (inside grip). Then press "Stop & save recording".\n\n' +
+        'Inside grip of a hole: close the fingers (Close 0mm) BEFORE going down, go down only with the ' +
+        'fingertip in the hole (the finger is thick ~8 mm above the TCP), then open the fingers. ' +
+        'Inside a hole the web contact/collision badge is approximate (box shapes); MuJoCo checks the exact shape.'
+    );
+  };
+
+  /** Grip direction = how the fingers move after the gripper stops at the grasp pose. */
+  const detectGripMode = (samples: TrajectorySample[]): GripMode | null => {
+    const final = samples[samples.length - 1];
+    let k = samples.length - 1;
+    while (k > 0 && poseDistMm(samples[k - 1].pose, final.pose) < 0.5 && poseAngleDeg(samples[k - 1].pose, final.pose) < 0.5) {
+      k--;
+    }
+    const preWidth = samples[k].width;
+    if (final.width > preWidth + 1) return 'inside';
+    if (final.width < preWidth - 1) return 'outside';
+    return null;
+  };
+
+  const stopRecording = () => {
+    if (recordTimer !== null) window.clearInterval(recordTimer);
+    recordTimer = null;
+    recordSample(); // final pose
+    graspList?.setRecording(false);
+    const samples = recordSamples;
+    recordSamples = [];
+    if (samples.length < 2) {
+      layout?.showError('Nothing was recorded: move the gripper while recording.', 'Recording');
+      return;
+    }
+    let gripMode = detectGripMode(samples);
+    if (!gripMode) {
+      gripMode = confirm(
+        'The recording ends without opening or closing the fingers at the grasp pose.\n\n' +
+          'OK = grip by CLOSING the fingers onto the part (outside grip)\n' +
+          'Cancel = grip by OPENING the fingers against an inner wall (inside grip)'
+      )
+        ? 'outside'
+        : 'inside';
+    }
+    const state = graspController!.getCurrentState();
+    const last = samples[samples.length - 1];
+    const count = savedGrasps.length + 1;
+    const newGrasp: SavedGrasp = {
+      id: `grasp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      name: `Recorded Grasp ${count}`,
+      tcpPose: last.pose,
+      rpy: state.relativeRpy,
+      openingWidth: last.width,
+      contactPoints: graspController!.getContactPointsPart(),
+      standoff: state.standoff,
+      depth: state.depth,
+      approachAxis: { x: 0, y: 0, z: 1 },
+      closingAxis: { x: 1, y: 0, z: 0 },
+      preGraspDistance: state.preGraspDistance,
+      tcpOffset: state.tcpOffset,
+      createdAt: Date.now(),
+      partName: currentModelName,
+      trajectory: samples,
+      gripMode,
+      gripperId: activeGripperId
+    };
+    savedGrasps.push(newGrasp);
+    saveGraspsToStorage();
+    graspList?.setGrasps(savedGrasps);
+    graspList?.setSelectedGraspId(newGrasp.id);
+    layout?.showInfo(
+      'Recording saved',
+      `"${newGrasp.name}": ${samples.length} poses, ${gripMode === 'inside' ? 'inside grip (fingers open to grip)' : 'outside grip (fingers close to grip)'}. ` +
+        'Press ▶ to replay it in MuJoCo.',
+      6000
+    );
+  };
+
   // Helper to restore grasp (places gripper at T_world_part * T_part_grasp)
-  const restoreGrasp = (grasp: SavedGrasp) => {
+  const restoreGrasp = async (grasp: SavedGrasp) => {
     if (!graspController) {
       layout?.showError('Please load the gripper first.');
       return;
+    }
+    const gid = grasp.gripperId ?? '2f85';
+    if (gid !== activeGripperId) {
+      await selectGripper(gid);
+      if (activeGripperId !== gid) return;
     }
     graspController.setRelativeGraspPose(grasp.tcpPose, grasp.rpy);
     graspController.setOpeningWidth(
@@ -137,6 +289,45 @@ document.addEventListener('DOMContentLoaded', async () => {
     graspController.setPreGraspDistance(grasp.preGraspDistance ?? 100);
     if (grasp.standoff !== undefined) graspController.setStandoff(grasp.standoff);
     if (grasp.depth !== undefined) graspController.setDepth(grasp.depth);
+  };
+
+  // Gripper selector: switches the gripper model in place (TCP pose kept) and remembers the choice
+  let switchingGripper = false;
+  const selectGripper = async (id: GripperId) => {
+    if (id === activeGripperId || switchingGripper) return;
+    if (recordTimer !== null) {
+      layout?.showError('Stop the recording before switching the gripper.', 'Gripper');
+      return;
+    }
+    const spec = GRIPPERS[id];
+    if (!graspController) {
+      activeGripperId = id;
+      applyGripperSpec(spec);
+      layout?.setActiveGripper(id);
+      gripperPanel?.setMaxOpening(spec.maxOpeningWidth);
+      return;
+    }
+    switchingGripper = true;
+    try {
+      layout?.showLoading(true, `Loading ${spec.label} gripper assets...`);
+      const model = await GripperLoader.loadGripper(spec);
+      activeGripperId = id;
+      applyGripperSpec(spec);
+      graspController.replaceGripperModel(model);
+      layout?.setActiveGripper(id);
+      gripperPanel?.setMaxOpening(spec.maxOpeningWidth);
+      layout?.showLoading(false);
+      layout?.showInfo(
+        'Gripper',
+        `${spec.label} selected (opening 0-${spec.maxOpeningWidth} mm, TCP ${spec.defaultTcpOffset} mm from the flange).`,
+        4000
+      );
+    } catch (err: any) {
+      layout?.showLoading(false);
+      layout?.showError(err?.message || `Failed to load ${spec.label}.`, 'Gripper');
+    } finally {
+      switchingGripper = false;
+    }
   };
 
   // Helper to export grasps as JSON
@@ -156,6 +347,94 @@ document.addEventListener('DOMContentLoaded', async () => {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  // ---- MuJoCo simulation bridge (served by the Vite plugin in vite.config.ts) ----
+  const arrayBufferToBase64 = (buf: ArrayBuffer): string => {
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(binary);
+  };
+
+  let simPollTimer: number | null = null;
+
+  const pollSimulation = (runId: string) => {
+    if (simPollTimer !== null) window.clearInterval(simPollTimer);
+    let lastPhase = '';
+    simPollTimer = window.setInterval(async () => {
+      try {
+        const resp = await fetch(`/api/mujoco/status?id=${encodeURIComponent(runId)}`);
+        const st = await resp.json();
+        if (st.phase && st.phase !== lastPhase && st.state === 'running') {
+          lastPhase = st.phase;
+          layout?.showInfo('MuJoCo simulation', st.message || st.phase);
+        }
+        if (st.state !== 'running') {
+          window.clearInterval(simPollTimer!);
+          simPollTimer = null;
+          if (st.ok) {
+            layout?.showInfo('MuJoCo simulation finished', st.message || 'Pick & place completed.');
+          } else {
+            layout?.showError(st.message || 'Simulation failed (see terminal running npm run dev).', 'MuJoCo simulation failed');
+          }
+        }
+      } catch {
+        // dev server restarting; keep polling
+      }
+    }, 1000);
+  };
+
+  const simulateGraspInMujoco = async (grasp: SavedGrasp) => {
+    if (!currentModelBuffer || !viewer?.getModelRoot()) {
+      layout?.showError('Load the CAD part (STEP file) first.', 'MuJoCo simulation');
+      return;
+    }
+    if (!/\.(stp|step)$/i.test(currentModelName)) {
+      layout?.showError('MuJoCo simulation currently supports STEP parts only.', 'MuJoCo simulation');
+      return;
+    }
+    if (grasp.partName && grasp.partName !== currentModelName) {
+      layout?.showError(
+        `This grasp was taught on "${grasp.partName}" but "${currentModelName}" is loaded.`,
+        'MuJoCo simulation'
+      );
+      return;
+    }
+
+    // T_world_part as shown in the viewer: MuJoCo places the part on the table in this same orientation.
+    const root = viewer.getModelRoot()!;
+    root.updateMatrixWorld(true);
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    root.matrixWorld.decompose(pos, quat, new THREE.Vector3());
+
+    layout?.showInfo('MuJoCo simulation', 'Starting simulator (first run converts the STEP mesh, ~30 s)...');
+    try {
+      const resp = await fetch('/api/mujoco/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grasp,
+          partFileName: currentModelName,
+          partFileBase64: arrayBufferToBase64(currentModelBuffer),
+          partWorldPose: {
+            position: { x: pos.x, y: pos.y, z: pos.z },
+            orientation: { x: quat.x, y: quat.y, z: quat.z, w: quat.w }
+          }
+        })
+      });
+      const res = await resp.json();
+      if (!resp.ok || !res.ok) throw new Error(res.message || `HTTP ${resp.status}`);
+      pollSimulation(res.runId);
+    } catch (err: any) {
+      layout?.showError(
+        `Could not start MuJoCo: ${err?.message || err}. Is the app running via "npm run dev"?`,
+        'MuJoCo simulation failed'
+      );
+    }
   };
 
   // Helper to import grasps from JSON
@@ -236,6 +515,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     onLoadGripperClick: async () => {
       await loadGripperModel();
     },
+    onGripperSelect: (id) => {
+      selectGripper(id);
+    },
     onTransformModeToggle: (mode) => {
       graspController?.setTransformMode(mode);
     },
@@ -257,6 +539,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       graspController?.stopTestGrasp();
     }
   });
+
+  layout.setActiveGripper(activeGripperId);
 
   // 2. Initialize 3D Viewer into viewport container
   viewer = new Viewer(layout.viewportContainer);
@@ -427,6 +711,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     },
     onImportJSON: (imported) => {
       importGraspsJSON(imported);
+    },
+    onSimulateGrasp: (grasp) => {
+      if (recordTimer !== null) {
+        layout?.showError('Stop the recording first.', 'MuJoCo simulation');
+        return;
+      }
+      simulateGraspInMujoco(grasp);
+    },
+    onToggleRecord: () => {
+      if (recordTimer !== null) stopRecording();
+      else startRecording();
     }
   });
   graspList.setGrasps(savedGrasps);
@@ -439,8 +734,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!viewer || !layout) return;
 
     try {
-      layout.showLoading(true, 'Loading Robotiq 2F-85 Gripper assets...');
-      const gripperModel = await GripperLoader.loadGripper();
+      layout.showLoading(true, `Loading ${GRIPPERS[activeGripperId].label} gripper assets...`);
+      const gripperModel = await GripperLoader.loadGripper(GRIPPERS[activeGripperId]);
 
       graspController = new GraspController(
         gripperModel,
@@ -486,7 +781,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (err: any) {
       layout.showLoading(false);
       layout.showError(
-        err?.message || 'Failed to load Robotiq 2F-85 gripper. Verify /gripper/ assets.'
+        err?.message || `Failed to load ${GRIPPERS[activeGripperId].label} gripper. Verify ${GRIPPERS[activeGripperId].baseUrl} assets.`
       );
     }
   };

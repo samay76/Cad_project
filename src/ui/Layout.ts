@@ -1,8 +1,11 @@
+import { GRIPPERS, type GripperId } from '../config';
+
 export interface LayoutCallbacks {
   onFileSelected: (file: File) => void;
   onSampleSelected: (sampleName: string, sampleUrl: string) => void;
   onUrlSelected: (url: string) => void;
   onLoadGripperClick: () => void;
+  onGripperSelect: (id: GripperId) => void;
   onTransformModeToggle: (mode: 'translate' | 'rotate') => void;
   onTargetToggle?: (target: 'part' | 'gripper') => void;
   onSnapPointClick: () => void;
@@ -32,6 +35,7 @@ export class AppLayout {
   private loadingMessage!: HTMLElement;
   private errorToast!: HTMLElement;
   private errorMessage!: HTMLElement;
+  private errorTitle!: HTMLElement;
 
   // Floating toolbar buttons
   private btnTbEditGripper!: HTMLButtonElement;
@@ -82,7 +86,7 @@ export class AppLayout {
               </button>
 
               <!-- LOAD GRIPPER BUTTON -->
-              <button id="btn-load-gripper" class="btn btn-gripper" title="Load Robotiq 2F-85 Gripper from /gripper/">
+              <button id="btn-load-gripper" class="btn btn-gripper" title="Load the selected gripper">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <rect x="7" y="11" width="10" height="9" rx="1"/>
                   <path d="M12 2v5M9 7h6M8 11V7M16 11V7"/>
@@ -91,6 +95,16 @@ export class AppLayout {
                 </svg>
                 <span>Load Gripper</span>
               </button>
+
+              <!-- GRIPPER SELECTOR -->
+              <div class="gripper-select" role="group" aria-label="Gripper type" title="Select which gripper to use">
+                ${Object.values(GRIPPERS)
+                  .map(
+                    (g) =>
+                      `<button class="gripper-select-btn" data-gripper="${g.id}" title="Use the ${g.label} (opening 0-${g.maxOpeningWidth} mm)">${g.label.replace('Robotiq ', '')}</button>`
+                  )
+                  .join('')}
+              </div>
 
               <!-- Direct STEP File URL / Path Input -->
               <div class="url-input-group">
@@ -313,7 +327,7 @@ export class AppLayout {
         <div class="error-toast" id="error-toast">
           <div class="error-icon">⚠️</div>
           <div class="error-content">
-            <div class="error-title">CAD Loading Error</div>
+            <div class="error-title" id="error-title">CAD Loading Error</div>
             <div class="error-message" id="error-message">Failed to load CAD file.</div>
           </div>
           <button class="btn-close-toast" id="btn-close-toast">✕</button>
@@ -337,6 +351,7 @@ export class AppLayout {
     this.loadingMessage = this.root.querySelector('#loading-message')!;
     this.errorToast = this.root.querySelector('#error-toast')!;
     this.errorMessage = this.root.querySelector('#error-message')!;
+    this.errorTitle = this.root.querySelector('#error-title')!;
 
     this.btnTbEditGripper = this.root.querySelector('#tb-btn-edit-gripper')!;
     this.btnTbEditPart = this.root.querySelector('#tb-btn-edit-part')!;
@@ -356,6 +371,14 @@ export class AppLayout {
         this.fileInput.click();
       });
     }
+
+    this.root.querySelectorAll<HTMLButtonElement>('.gripper-select-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!btn.classList.contains('is-active')) {
+          this.callbacks.onGripperSelect(btn.dataset.gripper as GripperId);
+        }
+      });
+    });
 
     const loadGripperBtn = this.root.querySelector('#btn-load-gripper');
     if (loadGripperBtn) {
@@ -576,6 +599,17 @@ export class AppLayout {
     this.gripperStatusBadge.classList.toggle('active', loaded);
   }
 
+  /** Highlights the selected gripper and names it in the status badge. */
+  public setActiveGripper(id: GripperId) {
+    this.root.querySelectorAll<HTMLButtonElement>('.gripper-select-btn').forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.gripper === id);
+    });
+    const text = this.gripperStatusBadge.querySelector('.gripper-text');
+    if (text) text.textContent = `${GRIPPERS[id].label} Active`;
+    const loadBtn = this.root.querySelector<HTMLButtonElement>('#btn-load-gripper');
+    if (loadBtn) loadBtn.title = `Load the ${GRIPPERS[id].label} gripper`;
+  }
+
   public setLoadedFileName(name: string) {
     this.fileNameDisplay.textContent = name;
     this.fileNameDisplay.parentElement?.classList.add('has-file');
@@ -590,8 +624,33 @@ export class AppLayout {
     }
   }
 
-  public showError(message: string) {
+  public showError(message: string, title = 'CAD Loading Error') {
+    this.showToast(title, message, 'error');
+  }
+
+  /** autoHideMs: close the message by itself after that time (short confirmations). */
+  public showInfo(title: string, message: string, autoHideMs?: number) {
+    this.showToast(title, message, 'info');
+    if (autoHideMs) {
+      this.toastTimer = window.setTimeout(() => this.hideToast(), autoHideMs);
+    }
+  }
+
+  public hideToast() {
+    this.errorToast.classList.remove('visible');
+  }
+
+  private toastTimer: number | null = null;
+
+  private showToast(title: string, message: string, variant: 'error' | 'info') {
+    if (this.toastTimer !== null) {
+      window.clearTimeout(this.toastTimer);
+      this.toastTimer = null;
+    }
+    this.errorTitle.textContent = title;
     this.errorMessage.textContent = message;
+    this.errorToast.classList.toggle('is-info', variant === 'info');
+    this.errorToast.querySelector('.error-icon')!.textContent = variant === 'info' ? 'ℹ️' : '⚠️';
     this.errorToast.classList.add('visible');
   }
 }

@@ -1,6 +1,7 @@
 import { defineConfig, Plugin } from 'vite';
 import fs from 'fs';
 import path from 'path';
+import { mujocoBridgePlugin } from './vite-plugins/mujocoBridge';
 
 function localFileServerPlugin(): Plugin {
   return {
@@ -75,7 +76,7 @@ export default defineConfig({
       allow: ['..', '/home/human']
     }
   },
-  plugins: [localFileServerPlugin()],
+  plugins: [mujocoBridgePlugin(), localFileServerPlugin()],
   optimizeDeps: {
     exclude: ['occt-import-js']
   },

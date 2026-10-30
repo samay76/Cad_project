@@ -2,3 +2,16 @@ node_modules
 dist
 .DS_Store
 *.log
+
+# MuJoCo CAD simulation (generated)
+jenga_mujoco/runs/
+jenga_mujoco/assets/cad_parts/
+__pycache__/
+jenga_mujoco/assets/gripper_hulls/
+jenga_mujoco/assets/hande/
+# Jenga ACT training artifacts (too large for git; checkpoint > GitHub's 100 MB limit)
+jenga_mujoco/outputs/
+jenga_mujoco/data/
+*.mjb
+# Upstream Hand-E package (own git repo); the app uses the copy in public/grippers/robotiq_hande
+robotiq_hande_description/

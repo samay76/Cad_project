@@ -83,6 +83,16 @@ export interface ContactPoints {
   right?: Vector3D;
 }
 
+/** One sample of a recorded gripper motion (Record button), relative to the part. */
+export interface TrajectorySample {
+  t: number; // ms since the recording started
+  pose: Pose; // T_part_tcp (mm + quaternion xyzw), same frame as SavedGrasp.tcpPose
+  width: number; // finger opening in mm
+}
+
+/** 'outside' = fingers close onto the part; 'inside' = fingers open against a bore/inner wall. */
+export type GripMode = 'outside' | 'inside';
+
 export interface SavedGrasp {
   id: string;
   name: string;
@@ -99,6 +109,9 @@ export interface SavedGrasp {
   tcpOffset: number; // mm
   createdAt: number;
   partName?: string;
+  trajectory?: TrajectorySample[]; // recorded approach motion; last sample = tcpPose
+  gripMode?: GripMode;
+  gripperId?: '2f85' | 'hande'; // gripper the grasp was taught with (missing = 2f85)
 }
 
 export type TestPhase =

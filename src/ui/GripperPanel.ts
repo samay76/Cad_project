@@ -1,4 +1,5 @@
 import type { GripperState, EulerAngles } from '../types';
+import { GRIPPER_CONFIG } from '../config';
 
 export interface GripperPanelEvents {
   onNumericPoseChange: (pos: { x: number; y: number; z: number }, rpy: EulerAngles) => void;
@@ -46,6 +47,16 @@ export class GripperPanel {
   public setGripperState(state: GripperState) {
     this.state = state;
     this.updateValues();
+  }
+
+  /** Updates the opening slider and presets for the active gripper (GRIPPER_CONFIG.maxOpeningWidth). */
+  public setMaxOpening(maxMm: number) {
+    const slider = this.container.querySelector<HTMLInputElement>('#slider-opening');
+    if (slider) slider.max = String(maxMm);
+    const half = this.container.querySelector('#btn-quick-half');
+    if (half) half.textContent = `Half (${maxMm / 2}mm)`;
+    const open = this.container.querySelector('#btn-quick-open');
+    if (open) open.textContent = `Open (${maxMm}mm)`;
   }
 
   public setCanSnap(canSnap: boolean) {
@@ -342,11 +353,11 @@ export class GripperPanel {
                 <span class="sub-label">Opening Width:</span>
                 <span id="label-opening-width" class="slider-value mono">85.0 mm</span>
               </div>
-              <input type="range" id="slider-opening" min="0" max="85" step="0.5" value="85" class="range-slider" />
+              <input type="range" id="slider-opening" min="0" max="${GRIPPER_CONFIG.maxOpeningWidth}" step="0.5" value="${GRIPPER_CONFIG.maxOpeningWidth}" class="range-slider" />
               <div class="slider-quick-buttons">
                 <button id="btn-quick-close" class="btn btn-outline btn-micro">Close (0mm)</button>
-                <button id="btn-quick-half" class="btn btn-outline btn-micro">Half (42.5mm)</button>
-                <button id="btn-quick-open" class="btn btn-outline btn-micro">Open (85mm)</button>
+                <button id="btn-quick-half" class="btn btn-outline btn-micro">Half (${GRIPPER_CONFIG.maxOpeningWidth / 2}mm)</button>
+                <button id="btn-quick-open" class="btn btn-outline btn-micro">Open (${GRIPPER_CONFIG.maxOpeningWidth}mm)</button>
               </div>
             </div>
 
@@ -659,10 +670,10 @@ export class GripperPanel {
       this.events.onOpeningChange(0);
     });
     this.container.querySelector('#btn-quick-half')?.addEventListener('click', () => {
-      this.events.onOpeningChange(42.5);
+      this.events.onOpeningChange(GRIPPER_CONFIG.maxOpeningWidth / 2);
     });
     this.container.querySelector('#btn-quick-open')?.addEventListener('click', () => {
-      this.events.onOpeningChange(85);
+      this.events.onOpeningChange(GRIPPER_CONFIG.maxOpeningWidth);
     });
 
     // TCP Offset & Pre-Grasp Distance

@@ -1,26 +1,30 @@
+import * as THREE from 'three';
 import URDFLoader, { type URDFRobot } from 'urdf-loader';
-import { GRIPPER_CONFIG } from '../config';
+import { GRIPPER_CONFIG, type GripperSpec } from '../config';
 import { GripperModel } from './GripperModel';
 
 export class GripperLoader {
   /**
-   * Loads the Robotiq 2F-85 URDF model using URDFLoader
+   * Loads a gripper URDF (see GRIPPERS in config.ts) using URDFLoader
    */
-  public static async loadGripper(): Promise<GripperModel> {
-    const baseUrl = GRIPPER_CONFIG.baseUrl;
-    const urdfFileName = GRIPPER_CONFIG.urdfFile || 'robotiq_2f_85.urdf';
-    const urdfUrl = `${baseUrl}${urdfFileName}`;
+  public static async loadGripper(spec: GripperSpec): Promise<GripperModel> {
+    const urdfUrl = `${spec.baseUrl}${spec.urdfFile}`;
 
-    const loader = new URDFLoader();
-    loader.packages = {
-      robotiq_description: baseUrl.replace(/\/$/, '')
-    };
+    // Resolve only when every file (URDF + all meshes) has loaded: collision proxies are built from
+    // the visual meshes, so a finger mesh arriving late would leave that finger without contact checks.
+    const manager = new THREE.LoadingManager();
+    const allLoaded = new Promise<void>((resolve) => {
+      manager.onLoad = () => resolve();
+    });
+    const loader = new URDFLoader(manager);
+    loader.packages = { ...spec.packages };
 
     let robot: URDFRobot;
     try {
       robot = await loader.loadAsync(urdfUrl);
+      await Promise.race([allLoaded, new Promise((r) => setTimeout(r, 30000))]);
     } catch (err: any) {
-      throw new Error(`Failed to load Robotiq 2F-85 URDF from ${urdfUrl}: ${err?.message || err}`);
+      throw new Error(`Failed to load ${spec.label} URDF from ${urdfUrl}: ${err?.message || err}`);
     }
 
     robot.scale.set(
@@ -29,24 +33,6 @@ export class GripperLoader {
       GRIPPER_CONFIG.unitScale
     );
 
-    // Wait until visual meshes have finished loading into links
-    await new Promise<void>((resolve) => {
-      let attempts = 0;
-      const check = () => {
-        let meshCount = 0;
-        robot.traverse((c) => {
-          if ((c as any).isMesh) meshCount++;
-        });
-        if (meshCount >= 9 || attempts > 100) {
-          resolve();
-        } else {
-          attempts++;
-          setTimeout(check, 30);
-        }
-      };
-      check();
-    });
-
-    return new GripperModel(robot);
+    return new GripperModel(robot, spec);
   }
 }

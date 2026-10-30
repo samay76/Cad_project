@@ -113,7 +113,7 @@ export class ContactGrip {
       gripperModel.setOpeningWidth(closedWidth);
       const stateClosed = CollisionChecker.evaluateState(gripperModel, cadPartsRoot, tolerance);
       if (!stateClosed.hasCollision && stateClosed.isContact) {
-        targetOpening = Number(closedWidth.toFixed(1));
+        targetOpening = closedWidth; // exact: rounding to 0.1 mm can step back out of the contact tolerance
         stateAtTarget = stateClosed;
       } else {
         gripperModel.setOpeningWidth(targetOpening);
@@ -272,7 +272,7 @@ export class ContactGrip {
     gripperModel.root.updateMatrixWorld(true);
 
     if (!cadPartsRoot) {
-      return { cleared: true, message: 'Gripper fully open (85 mm)' };
+      return { cleared: true, message: `Gripper fully open (${GRIPPER_CONFIG.maxOpeningWidth} mm)` };
     }
 
     const state = CollisionChecker.evaluateState(gripperModel, cadPartsRoot, 0.05);

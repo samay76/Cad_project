@@ -7,6 +7,7 @@ import {
   disposeBoundsTree
 } from 'three-mesh-bvh';
 import type { GripperModel } from './GripperModel';
+import { GRIPPER_CONFIG } from '../config';
 import { PerformanceHUD } from '../ui/PerformanceHUD';
 
 // Initialize three-mesh-bvh extensions on Three.js prototypes once
@@ -266,7 +267,7 @@ export class CollisionChecker {
           leftContactWorld = this._tipLocalPoint.clone().applyMatrix4(leftTipProxy.matrixWorld);
         } else {
           // Check proximity within tolerance (< 0.02 ms)
-          this._expandedTipBox.copy(tipBox).expandByScalar(tolerance);
+          this._expandedTipBox.copy(tipBox).expandByScalar(tolerance / GRIPPER_CONFIG.unitScale); // tipBox is in URDF units (m), tolerance in mm
           const isProxHit = (cadBvh as any).intersectsBox
             ? (cadBvh as any).intersectsBox(this._expandedTipBox, this._relMatrix)
             : false;
@@ -301,7 +302,7 @@ export class CollisionChecker {
           rightContactWorld = this._tipLocalPoint.clone().applyMatrix4(rightTipProxy.matrixWorld);
         } else {
           // Check proximity within tolerance (< 0.02 ms)
-          this._expandedTipBox.copy(tipBox).expandByScalar(tolerance);
+          this._expandedTipBox.copy(tipBox).expandByScalar(tolerance / GRIPPER_CONFIG.unitScale); // tipBox is in URDF units (m), tolerance in mm
           const isProxHit = (cadBvh as any).intersectsBox
             ? (cadBvh as any).intersectsBox(this._expandedTipBox, this._relMatrix)
             : false;

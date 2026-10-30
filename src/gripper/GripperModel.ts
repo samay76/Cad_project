@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { URDFRobot } from 'urdf-loader';
 import { MeshBVH } from 'three-mesh-bvh';
-import { GRIPPER_CONFIG } from '../config';
+import { GRIPPER_CONFIG, type GripperSpec } from '../config';
 
 export class GripperModel {
   // Master root group located at the TCP (Tool Center Point)
@@ -12,6 +12,7 @@ export class GripperModel {
 
   // URDF Robot instance
   private robot: URDFRobot;
+  public readonly spec: GripperSpec;
 
   // Visual frame helpers
   private tcpAxesHelper: THREE.AxesHelper;
@@ -42,9 +43,12 @@ export class GripperModel {
   private _scratchBox = new THREE.Box3();
   private _scratchVec = new THREE.Vector3();
 
-  constructor(robot: URDFRobot) {
+  constructor(robot: URDFRobot, spec: GripperSpec) {
+    this.spec = spec;
+    this.openingWidth = spec.maxOpeningWidth;
+    this.tcpOffset = spec.defaultTcpOffset;
     this.root = new THREE.Group();
-    this.root.name = 'Robotiq_2F85_TCP';
+    this.root.name = `${spec.id}_TCP`;
 
     this.bodyGroup = new THREE.Group();
     this.bodyGroup.name = 'GripperBody';
@@ -122,8 +126,8 @@ export class GripperModel {
     });
 
     // Categorize fingertip contact pads vs body meshes
-    const leftTip = this.robot.links['robotiq_85_left_finger_tip_link'];
-    const rightTip = this.robot.links['robotiq_85_right_finger_tip_link'];
+    const leftTip = this.robot.links[this.spec.leftTipLink];
+    const rightTip = this.robot.links[this.spec.rightTipLink];
     if (leftTip) {
       leftTip.traverse((c) => {
         if ((c as any).isMesh && !c.userData.isCollisionProxy) {
@@ -189,7 +193,10 @@ export class GripperModel {
       if (!visualMesh.geometry.boundingBox) {
         visualMesh.geometry.computeBoundingBox();
       }
-      const b = visualMesh.geometry.boundingBox!;
+      const override = this.spec.proxyBoxes?.[linkName];
+      const b = override
+        ? new THREE.Box3(new THREE.Vector3(...override.min), new THREE.Vector3(...override.max))
+        : visualMesh.geometry.boundingBox!;
       const sx = Math.max(0.002, b.max.x - b.min.x);
       const sy = Math.max(0.002, b.max.y - b.min.y);
       const sz = Math.max(0.002, b.max.z - b.min.z);
@@ -215,9 +222,9 @@ export class GripperModel {
       link.add(proxyMesh);
       this.allProxies.push(proxyMesh);
 
-      if (linkName === 'robotiq_85_left_finger_tip_link') {
+      if (linkName === this.spec.leftTipLink) {
         this.leftTipProxy = proxyMesh;
-      } else if (linkName === 'robotiq_85_right_finger_tip_link') {
+      } else if (linkName === this.spec.rightTipLink) {
         this.rightTipProxy = proxyMesh;
       } else {
         this.bodyProxies.push(proxyMesh);
@@ -280,39 +287,18 @@ export class GripperModel {
   }
 
   /**
-   * Adjusts finger opening width in millimeters [0 to 85 mm] using URDF kinematic joints
+   * Adjusts finger opening width in millimeters [0 to spec.maxOpeningWidth] using URDF kinematic joints
    */
   public setOpeningWidth(widthMm: number) {
     this.openingWidth = Math.max(
       GRIPPER_CONFIG.minOpeningWidth,
-      Math.min(GRIPPER_CONFIG.maxOpeningWidth, widthMm)
+      Math.min(this.spec.maxOpeningWidth, widthMm)
     );
 
-    // In Robotiq 2F-85 URDF:
-    // angle 0.0 rad = fully open (85 mm)
-    // angle 0.8 rad = fully closed (0 mm)
-    const angle = (1.0 - (this.openingWidth / GRIPPER_CONFIG.maxOpeningWidth)) * 0.8;
-
-    if (this.robot.joints['robotiq_85_left_knuckle_joint']) {
-      this.robot.setJointValue('robotiq_85_left_knuckle_joint', angle);
-    }
-    if (this.robot.joints['robotiq_85_right_knuckle_joint']) {
-      this.robot.setJointValue('robotiq_85_right_knuckle_joint', -angle);
-    }
-    if (this.robot.joints['robotiq_85_left_inner_knuckle_joint']) {
-      this.robot.setJointValue('robotiq_85_left_inner_knuckle_joint', angle);
-    }
-    if (this.robot.joints['robotiq_85_right_inner_knuckle_joint']) {
-      this.robot.setJointValue('robotiq_85_right_inner_knuckle_joint', -angle);
-    }
-    if (this.robot.joints['robotiq_85_left_finger_tip_joint']) {
-      this.robot.setJointValue('robotiq_85_left_finger_tip_joint', -angle);
-    }
-    if (this.robot.joints['robotiq_85_right_finger_tip_joint']) {
-      this.robot.setJointValue('robotiq_85_right_finger_tip_joint', angle);
-    }
-
-    this.root.updateMatrixWorld(true);
+    // Closing "angle" 0.0 = fully open, 0.8 = fully closed (2F-85 knuckle angle; prismatic grippers map
+    // it linearly to the finger travel so ContactGrip can treat all grippers alike).
+    const angle = (1.0 - (this.openingWidth / this.spec.maxOpeningWidth)) * 0.8;
+    this.setFingerAngles(angle, angle);
   }
 
   public getOpeningWidth(): number {
@@ -320,26 +306,43 @@ export class GripperModel {
   }
 
   /**
-   * Sets finger angles independently for non-symmetric contact stops
+   * Sets finger closing angles independently for non-symmetric contact stops (0 = open, 0.8 = closed)
    */
   public setFingerAngles(leftAngle: number, rightAngle: number) {
-    if (this.robot.joints['robotiq_85_left_knuckle_joint']) {
+    const j = this.robot.joints;
+    // keep the reported opening in sync (contact animations drive the fingers through here)
+    this.openingWidth = Math.max(0, Math.min(1, 1 - (leftAngle + rightAngle) / 2 / 0.8)) * this.spec.maxOpeningWidth;
+    if (this.spec.kinematics === 'prismatic') {
+      const travel = this.spec.fingerTravel ?? 0;
+      const q = (a: number) => Math.max(0, Math.min(1, 1 - a / 0.8)) * travel;
+      if (this.spec.leftFingerJoint && j[this.spec.leftFingerJoint]) {
+        this.robot.setJointValue(this.spec.leftFingerJoint, q(leftAngle));
+      }
+      if (this.spec.rightFingerJoint && j[this.spec.rightFingerJoint]) {
+        this.robot.setJointValue(this.spec.rightFingerJoint, q(rightAngle));
+      }
+      this.root.updateMatrixWorld(true);
+      return;
+    }
+
+    // Robotiq 2F-85 URDF: angle 0.0 rad = fully open (85 mm), 0.8 rad = fully closed (0 mm)
+    if (j['robotiq_85_left_knuckle_joint']) {
       this.robot.setJointValue('robotiq_85_left_knuckle_joint', leftAngle);
     }
-    if (this.robot.joints['robotiq_85_left_inner_knuckle_joint']) {
+    if (j['robotiq_85_left_inner_knuckle_joint']) {
       this.robot.setJointValue('robotiq_85_left_inner_knuckle_joint', leftAngle);
     }
-    if (this.robot.joints['robotiq_85_left_finger_tip_joint']) {
+    if (j['robotiq_85_left_finger_tip_joint']) {
       this.robot.setJointValue('robotiq_85_left_finger_tip_joint', -leftAngle);
     }
 
-    if (this.robot.joints['robotiq_85_right_knuckle_joint']) {
+    if (j['robotiq_85_right_knuckle_joint']) {
       this.robot.setJointValue('robotiq_85_right_knuckle_joint', -rightAngle);
     }
-    if (this.robot.joints['robotiq_85_right_inner_knuckle_joint']) {
+    if (j['robotiq_85_right_inner_knuckle_joint']) {
       this.robot.setJointValue('robotiq_85_right_inner_knuckle_joint', -rightAngle);
     }
-    if (this.robot.joints['robotiq_85_right_finger_tip_joint']) {
+    if (j['robotiq_85_right_finger_tip_joint']) {
       this.robot.setJointValue('robotiq_85_right_finger_tip_joint', rightAngle);
     }
 

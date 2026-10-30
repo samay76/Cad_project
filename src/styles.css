@@ -1089,6 +1089,20 @@ html, body {
   line-height: 1.4;
 }
 
+.error-message {
+  white-space: pre-line;
+  max-width: 420px;
+}
+
+.error-toast.is-info {
+  border-color: #bfdbfe;
+  border-left-color: var(--accent-blue);
+}
+
+.error-toast.is-info .error-title {
+  color: #1e3a8a;
+}
+
 .btn-close-toast {
   border: none;
   background: transparent;
@@ -2010,4 +2024,113 @@ html, body {
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+/* MuJoCo simulation launch */
+.grasps-footer-actions .btn-simulate {
+  grid-column: 1 / -1;
+  justify-content: center;
+}
+
+.btn-item-action.btn-simulate-item:hover {
+  background: #dbeafe;
+  color: var(--accent-blue);
+}
+
+/* Record gripper motion */
+.grasps-footer-actions .btn-record {
+  grid-column: 1 / -1;
+  justify-content: center;
+}
+
+.btn-record .rec-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #dc2626;
+  flex-shrink: 0;
+}
+
+.btn-record.is-recording {
+  background: #fee2e2;
+  border-color: #dc2626;
+  color: #991b1b;
+}
+
+.btn-record.is-recording .rec-dot {
+  border-radius: 2px;
+  animation: rec-blink 1s ease-in-out infinite;
+}
+
+@keyframes rec-blink {
+  50% { opacity: 0.25; }
+}
+
+.grasp-rec-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #fee2e2;
+  color: #b91c1c;
+  white-space: nowrap;
+}
+
+.btn-record .rec-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.grasp-rec-row {
+  margin-top: 3px;
+  display: flex;
+  gap: 4px;
+}
+
+.grasp-gripper-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #e0e7ff;
+  color: #3730a3;
+  white-space: nowrap;
+}
+
+/* Gripper selector (header) */
+.gripper-select {
+  display: inline-flex;
+  border: 1px solid #cbd5e1;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.gripper-select-btn {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 11px;
+  border: none;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.gripper-select-btn + .gripper-select-btn {
+  border-left: 1px solid #cbd5e1;
+}
+
+.gripper-select-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.gripper-select-btn.is-active {
+  background: #2563eb;
+  color: #fff;
 }

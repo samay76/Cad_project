@@ -155,6 +155,51 @@ export class GraspController {
     this.resetGripperPose();
   }
 
+  /**
+   * Swaps in another gripper model (gripper selector). The TCP keeps its world pose, so a taught
+   * position can be checked with the other gripper; finger opening and TCP offset take the new
+   * gripper's defaults.
+   */
+  public replaceGripperModel(model: GripperModel) {
+    if (this.isTesting) this.stopTestGrasp();
+    const old = this.gripperModel;
+    old.root.updateMatrixWorld(true);
+    model.root.position.copy(old.root.position);
+    model.root.quaternion.copy(old.root.quaternion);
+    model.root.updateMatrixWorld(true);
+
+    this.scene.remove(old.root);
+    this.transformControls.detach();
+    old.dispose();
+
+    this.gripperModel = model;
+    this.scene.add(model.root);
+    this.transformControls.attach(
+      this.activeEditTarget === 'part' && this.cadPartsRoot ? this.cadPartsRoot : model.root
+    );
+    if (this.partController) {
+      this.partController.setGripperRoot(model.root);
+    }
+
+    this.contactStatus = 'none';
+    this.contactMessage = 'No collision';
+    this.leftFingerContact = false;
+    this.rightFingerContact = false;
+    this.measuredGraspWidth = undefined;
+    this.contactPointsPart = {};
+
+    this.evaluateCollisionState();
+    if (this.partController) {
+      this.partController.updateCachedPartGrasp();
+    }
+    this.notifyState();
+    this.requestRender();
+  }
+
+  public getGripperSpec() {
+    return this.gripperModel.spec;
+  }
+
   public setPartController(controller: PartController) {
     this.partController = controller;
     this.partController.setGripperRoot(this.gripperModel.root);

@@ -1,0 +1,59 @@
+<mujoco model="cs66">
+  <compiler angle="radian"/>
+  <option cone="elliptic" impratio="10"/>
+
+  <asset>
+    <mesh name="base_collision" content_type="model/stl" file="meshes/base_collision.stl"/>
+    <mesh name="shoulder_collision" content_type="model/stl" file="meshes/shoulder_collision.stl"/>
+    <mesh name="upperarm_collision" content_type="model/stl" file="meshes/upperarm_collision.stl"/>
+    <mesh name="forearm_collision" content_type="model/stl" file="meshes/forearm_collision.stl"/>
+    <mesh name="wrist1_collision" content_type="model/stl" file="meshes/wrist1_collision.stl"/>
+    <mesh name="wrist2_collision" content_type="model/stl" file="meshes/wrist2_collision.stl"/>
+    <mesh name="wrist3_collision" content_type="model/stl" file="meshes/wrist3_collision.stl"/>
+  </asset>
+
+  <worldbody>
+    <body name="base_link">
+      <geom pos="0 0 0" quat="1 0 0 0" type="mesh" rgba="0.7 0.7 0.7 1" mesh="base_collision"/>
+      <body name="shoulder_link" pos="0 0 0.1625">
+        <inertial pos="2.2e-05 -0.016526 -0.014442" quat="0.702471 0.71171 0.00157047 0.000957072" mass="4.521" diaginertia="0.0141921 0.0127776 0.00919753"/>
+        <joint name="shoulder_pan_joint" range="-6.28319 6.28319" actuatorfrcrange="-150 150"/>
+        <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="shoulder_collision"/>
+        <body name="upperarm_link" quat="0.707107 0.707107 0 0">
+          <inertial pos="-0.17828 4e-06 0.12803" quat="0.581361 0.402323 0.402159 0.581742" mass="7.533" diaginertia="0.6614 0.602667 0.0710132"/>
+          <joint name="shoulder_lift_joint" range="-6.28319 6.28319" actuatorfrcrange="-150 150"/>
+          <geom pos="0 0 0" quat="1 0 0 0" type="mesh" rgba="0.7 0.7 0.7 1" mesh="upperarm_collision"/>
+          <body name="forearm_link" pos="-0.427 0 0">
+            <inertial pos="-0.20416 -7e-06 0.03064" quat="0.512768 0.486947 0.487043 0.512582" mass="3.009" diaginertia="0.22281 0.218153 0.00820696"/>
+            <joint name="elbow_joint" range="-3.14159 3.14159" actuatorfrcrange="-150 150"/>
+            <geom pos="0 0 0" quat="1 0 0 0" type="mesh" rgba="0.7 0.7 0.7 1" mesh="forearm_collision"/>
+            <body name="wrist_1_link" pos="-0.3905 0 0.1475">
+              <inertial pos="1.3e-05 -0.00479 -0.02274" quat="0.999994 -6.29913e-05 0.000434375 0.00344672" mass="1.559" diaginertia="0.00450092 0.00421639 0.0014539"/>
+              <joint name="wrist_1_joint" range="-6.28319 6.28319" actuatorfrcrange="-28 28"/>
+              <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="wrist1_collision"/>
+              <body name="wrist_2_link" pos="0 -0.0965 0" quat="0.707107 0.707107 0 0">
+                <inertial pos="-1.4e-05 0.005107 -0.012702" quat="0.999987 0.00363345 -0.00125261 0.00336344" mass="1.447" diaginertia="0.00237872 0.00208593 0.00131905"/>
+                <joint name="wrist_2_joint" range="-6.28319 6.28319" actuatorfrcrange="-28 28"/>
+                <geom quat="1 0 0 0" type="mesh" rgba="0.7 0.7 0.7 1" mesh="wrist2_collision"/>
+                <body name="wrist_3_link" pos="0 0.095 0" quat="0.707107 -0.707107 0 0">
+                  <inertial pos="-0.000684 -0.000175 -0.04234" quat="0.997561 0.000823903 -0.00355094 -0.0697001" mass="0.5" diaginertia="0.00143149 0.00142987 0.000326441"/>
+                  <joint name="wrist_3_joint" range="-6.28319 6.28319" actuatorfrcrange="-28 28"/>
+                  <geom quat="1 0 0 0" type="mesh" rgba="0.7 0.7 0.7 1" mesh="wrist3_collision"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <contact>
+    <exclude body1="base_link" body2="shoulder_link"/>
+    <exclude body1="shoulder_link" body2="upperarm_link"/>
+    <exclude body1="upperarm_link" body2="forearm_link"/>
+    <exclude body1="forearm_link" body2="wrist_1_link"/>
+    <exclude body1="wrist_1_link" body2="wrist_2_link"/>
+    <exclude body1="wrist_2_link" body2="wrist_3_link"/>
+  </contact>
+</mujoco>

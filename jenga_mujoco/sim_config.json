@@ -1,0 +1,15 @@
+{
+  "_comment": "Settings for cad_pick_place.py (CAD-part pick & place). World frame: table top at z=0, robot base at origin, meters.",
+  "pick_xy": [0.45, -0.10],
+  "place_xy": [0.55, 0.15],
+  "place_floor_z": 0.006,
+  "place_clearance_m": 0.004,
+  "lift_height_m": 0.12,
+  "density_kg_m3": 7850,
+  "grip_force_limit": 5.0,
+  "grip_force_limit_hande_N": 60.0,
+  "collision_tolerance_mm": 1.0,
+  "settle_seconds": 1.5,
+  "preview_seconds": 3.0,
+  "speed": 1.0
+}
