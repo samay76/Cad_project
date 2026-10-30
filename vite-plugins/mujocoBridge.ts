@@ -9,6 +9,10 @@
  *   -> contents of status.json written by the Python process
  *      ({ state: 'running' | 'done' | 'failed', phase, message, ok }).
  *
+ * GET  /api/mujoco/file?id=<runId>&name=<file.jpg|png>
+ *   -> an image written by the simulator into the run folder: feed.jpg (live inspection camera,
+ *      refreshed ~7x per second) and inspect_XX.png (inspection stills).
+ *
  * Python interpreter: $MUJOCO_PYTHON, default ~/miniforge3/envs/mujoco_cad/bin/python.
  */
 import type { Plugin } from 'vite';
@@ -132,6 +136,26 @@ export function mujocoBridgePlugin(): Plugin {
             return sendJson(res, 200, { ok: true, runId });
           } catch (err: any) {
             return sendJson(res, 500, { ok: false, message: err?.message || String(err) });
+          }
+        }
+
+        if (url.pathname === '/api/mujoco/file' && req.method === 'GET') {
+          const id = url.searchParams.get('id') || '';
+          const name = url.searchParams.get('name') || '';
+          if (!/^[\w-]+$/.test(id) || !/^[\w-]+\.(jpg|png)$/.test(name)) {
+            res.writeHead(400);
+            return res.end('Bad request');
+          }
+          try {
+            const data = fs.readFileSync(path.join(runsDir, id, name));
+            res.writeHead(200, {
+              'Content-Type': name.endsWith('.png') ? 'image/png' : 'image/jpeg',
+              'Cache-Control': 'no-store'
+            });
+            return res.end(data);
+          } catch {
+            res.writeHead(404);
+            return res.end('Not found');
           }
         }
 

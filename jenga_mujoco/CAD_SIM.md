@@ -69,12 +69,32 @@ Opening = inside grip, closing = outside grip. If they don't move, the app asks.
 The part lies on the table in the **same orientation it has in the web viewer**, then settles under
 gravity; the grasp is applied relative to the part's settled pose.
 
+### Inspection camera
+
+A camera stands on a post at the table edge (`cam_inspection`). After lifting, the robot brings the part
+to the inspection point in front of it and turns it about its own centre of mass, like a turntable:
+front, turned 90/180/-90 deg, then tilted to show the bottom and the top. At each position a still image
+is saved. Then the part goes to the tray as before.
+
+In the web app a **camera panel** opens in the 3D view when you press ▶. It shows the live camera feed
+during the run and the inspection images as thumbnails, each with the slip of the part in the
+gripper at that moment. Click a thumbnail for the full-size image.
+
+- Settings: `inspection` in `sim_config.json` (camera position, inspection point, field of view,
+  views, turn speed). Views the arm can't reach are skipped and listed in the result.
+- Turning too fast makes the part slip in the 2F-85's weak simulated grip (about 6 mm per 90 deg turn at
+  2 s per turn, under 1 mm at 4 s); the default is 4 s per turn.
+- Files per run in `runs/<id>/`: `feed.jpg` (live frame) and `inspect_01.png`… (640×480).
+- The camera is rendered by a helper process (`camera_feed.py`), because the MuJoCo window and an
+  offscreen renderer can't share one process here.
+
 ## Sequence and checks
 
 settle → **preview** (green ghost = taught grasp with the fingers at the pre-grip width, TCP axes
 X red / Y green / Z blue, yellow dots = taught path) → **check** → start (single pose: `preGraspDistance`
 back along TCP −Z; recording: first recorded pose) → approach (straight line, or the recorded path) →
-grip (force-limited: close for outside, open for inside, stops on contact) → lift → transfer → place in
+grip (force-limited: close for outside, open for inside, stops on contact) → lift → inspection (camera on
+the table, several positions) → transfer → place in
 tray → release → retreat (taught path backwards) → home.
 
 Before the robot moves, every waypoint is checked; on failure the ghost turns **red**, the reason is
@@ -111,6 +131,7 @@ All transforms live in `frames.py`. Short version:
 | `frames.py` | All frame transforms (documented) |
 | `ik.py` | Multi-seed DLS IK that reports its residual |
 | `taught_path.py` | Saved pose or recording → TCP path, finger widths, grip direction (inside/outside) |
+| `camera_feed.py` | Inspection camera rendering in a helper process (live `feed.jpg` + stills) |
 | `hande.py` | Robotiq Hand-E MuJoCo model (meshes converted once into `assets/hande/`) |
 | `finger_collision.py` | Finger meshes split into convex pieces (CAD scene only), see below |
 | `cad_pick_place.py` | The simulator (preview, checks, execution, status reporting) |

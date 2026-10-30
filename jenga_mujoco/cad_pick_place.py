@@ -10,7 +10,8 @@ Launched by the web app's "Simulate in MuJoCo" button (vite-plugins/mujocoBridge
 
 Sequence: settle part on table -> preview ghost gripper at the taught grasp -> plan (IK + collision
 checks for every waypoint, abort with a clear error if anything is unreachable/colliding) ->
-approach -> grip -> lift -> transfer -> place in tray -> release -> retreat.
+approach -> grip -> lift -> inspection (part shown to a camera on the table in several positions,
+images saved) -> transfer -> place in tray -> release -> retreat.
 
 The approach is the path the user taught (see taught_path.py): either the straight pre-grasp ->
 grasp line of a single saved pose, or the recorded motion (Record button), replayed relative to the
@@ -37,6 +38,8 @@ from ik import solve as ik_solve, HOME_QPOS, N_ARM
 from step_to_mesh import convert
 from cad_part import PART_BODY
 from taught_path import from_grasp, densify, path_length
+from cameras import add_inspection_camera, CAM_INSPECTION
+from camera_feed import CameraFeed
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TCP_SITE = 'g_tcp'
@@ -184,8 +187,11 @@ def add_ghost(spec, ghost_geoms, T_gb_tcp):
 # Simulation runner
 # --------------------------------------------------------------------------------------------
 class CadPickPlace:
-    def __init__(self, step_path, grasp, part_world_quat_wxyz, cfg, status, headless=False, snapshots=None):
+    def __init__(self, step_path, grasp, part_world_quat_wxyz, cfg, status, headless=False, snapshots=None,
+                 feed_dir=None):
         self.cfg, self.status, self.grasp = cfg, status, grasp
+        self.insp = dict(cfg.get('inspection') or {})
+        self.feed_dir, self.feed = feed_dir, None
         self.headless, self.snap_dir = headless, snapshots
         self.viewer = self.renderer = None
         self.speed = float(cfg.get('speed', 1.0))
@@ -224,7 +230,12 @@ class CadPickPlace:
         model0 = build(**build_kw)
         self.fingers = finger_map(model0, self.gripper)
         ghost_geoms = collect_ghost_geoms(model0, self.fingers, self.path.pre_grip_width)
-        self.model = build(**build_kw, extra=lambda s: add_ghost(s, ghost_geoms, self.T_gb_tcp))
+        def extra(s):
+            add_ghost(s, ghost_geoms, self.T_gb_tcp)
+            if self.insp.get('enabled'):
+                add_inspection_camera(s, self.insp['camera_pos'], self.insp['point'], self.insp.get('fovy_deg', 45))
+
+        self.model = build(**build_kw, extra=extra)
         self.data = mujoco.MjData(self.model)
         self.scratch = mujoco.MjData(self.model)
 
@@ -249,6 +260,9 @@ class CadPickPlace:
 
     # ---------------- stepping / display ----------------
     def open_viewer(self):
+        if self.feed_dir and self.insp.get('enabled'):
+            self.feed = CameraFeed(self.model, CAM_INSPECTION, self.feed_dir)
+            self.status.info['camera_feed'] = 'feed.jpg'
         if self.headless:
             if self.snap_dir:
                 os.makedirs(self.snap_dir, exist_ok=True)
@@ -306,6 +320,8 @@ class CadPickPlace:
         t0 = time.time()
         for i in range(n):
             mujoco.mj_step(m, d)
+            if self.feed is not None and i % 8 == 0:
+                self.feed.push(d)
             if self.viewer is not None and i % 8 == 0:
                 if not self.viewer.is_running():
                     raise KeyboardInterrupt
@@ -450,6 +466,7 @@ class CadPickPlace:
         q_start = self.ik(start, Ts_w[0], [HOME_QPOS])
         q_approach = self.follow('taught approach' if path.recorded else 'approach', Ts_w[1:], q_start)
         q_lift = self.line('lift', T_grasp, T_lift, q_approach[-1])
+        inspect, skipped = self.plan_inspection(T_wp, q_lift[-1], path.pre_grip_width)
         q_above = self.ik('above place', T_above_place, [q_lift[-1]])
         q_down = self.line('place', T_above_place, T_place, q_above)
 
@@ -479,8 +496,60 @@ class CadPickPlace:
         for i, q in enumerate(q_down[-3:]):
             self.check_collisions(f'place ({i + 1}/3)', q, check_part=False, width_mm=path.pre_grip_width)
 
-        return dict(start=q_start, approach=q_approach, approach_w=ws[1:], approach_T=Ts_w,
+        return dict(inspect=inspect, inspect_skipped=skipped,
+                    start=q_start, approach=q_approach, approach_w=ws[1:], approach_T=Ts_w,
                     lift=q_lift, above=q_above, down=q_down, retreat=q_retreat, retreat_w=rev_w, retreat_T=rev_T)
+
+    def plan_inspection(self, T_wp, q_seed, width_mm):
+        """Arm motions that hold the part's COM at the inspection point and turn it through the configured
+        orientations: yaw about the vertical, then tilt about the horizontal axis perpendicular to the
+        camera's view (tilt > 0 turns the top towards the camera).
+        Between views the part rotates in place about its COM (small IK steps), so it is not flung around
+        by large joint-space swings. Views the arm cannot reach or that collide are skipped, not fatal.
+        Returns ([(label, [q...]), ...], [skipped reasons])."""
+        from scipy.spatial.transform import Rotation, Slerp
+        ins = self.insp
+        if not ins.get('enabled') or not ins.get('views'):
+            return [], []
+        P = np.asarray(ins['point'], dtype=float)
+        view = P - np.asarray(ins['camera_pos'], dtype=float)
+        vh = np.array([view[0], view[1], 0.0])
+        vh /= np.linalg.norm(vh)
+        tilt_axis = np.cross(vh, [0.0, 0.0, 1.0])
+        com = np.asarray(self.meta['com_m'])
+
+        def rot(axis, deg):
+            return Rotation.from_rotvec(np.radians(deg) * np.asarray(axis, dtype=float)).as_matrix()
+
+        def T_tcp_for(R, c):  # part orientation R with its COM at c -> TCP target
+            T_part = np.eye(4)
+            T_part[:3, :3] = R
+            T_part[:3, 3] = c - R @ com
+            return T_part @ self.T_part_tcp
+
+        def motion(R_a, c_a, R_b, c_b, step_mm=10.0, step_deg=8.0):
+            ang = np.degrees(Rotation.from_matrix(R_a.T @ R_b).magnitude())
+            n = max(1, int(np.ceil(max(np.linalg.norm(c_b - c_a) * 1000 / step_mm, ang / step_deg))))
+            sl = Slerp([0, 1], Rotation.from_matrix([R_a, R_b]))
+            return [T_tcp_for(sl(i / n).as_matrix(), c_a + (c_b - c_a) * i / n) for i in range(1, n + 1)]
+
+        R0 = T_wp[:3, :3]
+        R_prev = R0
+        c_prev = T_wp[:3, :3] @ com + T_wp[:3, 3] + [0, 0, self.cfg['lift_height_m']]  # COM after the lift
+        poses, skipped, q_prev = [], [], q_seed
+        for v in ins['views']:
+            label = v.get('label', f"yaw {v.get('yaw_deg', 0)} tilt {v.get('tilt_deg', 0)}")
+            R = rot(tilt_axis, v.get('tilt_deg', 0)) @ rot([0, 0, 1], v.get('yaw_deg', 0)) @ R0
+            try:
+                qs = self.follow(f'inspection {label}', motion(R_prev, c_prev, R, P), q_prev)
+                for q in qs[::3] + [qs[-1]]:
+                    self.check_collisions(f'inspection {label}', q, check_part=False, width_mm=width_mm)
+            except PlanError as e:
+                skipped.append(f'{label} ({str(e).split(":")[0]})')
+                continue
+            poses.append((label, qs))
+            q_prev, R_prev, c_prev = qs[-1], R, P
+        return poses, skipped
 
     def depth_hint(self, T, width_mm, q_seed, max_mm=40):
         """How far back along the TCP approach axis the colliding pose would be free (the finger is in too deep)."""
@@ -583,6 +652,25 @@ class CadPickPlace:
                             f"{cfg['lift_height_m'] * 1000:.0f} mm). The grasp does not hold it: check that both "
                             f'finger pads touch the part, or raise grip_force_limit in sim_config.json.')
 
+        if plan['inspect_skipped']:
+            st.info['inspection_skipped'] = plan['inspect_skipped']
+        if plan['inspect']:
+            ins, n = self.insp, len(plan['inspect'])
+            st.info['inspection'] = []
+            for i, (label, qs) in enumerate(plan['inspect']):
+                self.phase(f'inspect {i + 1}/{n}', f'Inspection {i + 1}/{n}: showing the part to the table camera ({label})...')
+                self.move(qs, ins.get('move_seconds', 2.0) * (1.0 if i else 1.5), grip_ctrl)
+                self.step(ins.get('hold_seconds', 0.8))
+                fname = f'inspect_{i + 1:02d}.png'
+                if self.feed is not None:
+                    self.feed.snap(self.data, fname)
+                slip_v, _ = pose_error(inv(site_T(self.model, self.data, TCP_SITE)) @ self.part_T(), T_tcp_part0)
+                st.info['inspection'].append({'label': label, 'file': fname, 'slip_mm': round(slip_v, 1)})
+                self.snapshot(f'03b_inspect_{i + 1:02d}')
+            if self.part_T()[2, 3] - z0 < 0.5 * cfg['lift_height_m']:
+                raise PlanError('The part slipped out of the gripper during the inspection moves. Try a firmer grasp '
+                                '(more finger contact) or fewer/smaller inspection tilts in sim_config.json.')
+
         self.phase('transfer', 'Carrying the part to the tray...')
         self.move([plan['above']], 3.0, grip_ctrl)
         slip_mm, slip_deg = pose_error(inv(site_T(self.model, self.data, TCP_SITE)) @ self.part_T(), T_tcp_part0)
@@ -608,6 +696,10 @@ class CadPickPlace:
                    f"TCP vs taught grasp: {e_mm:.1f} mm / {e_deg:.1f} deg. "
                    f"Slip during transport: {slip_mm:.1f} mm / {slip_deg:.1f} deg."
                    + (f' (Part rolled {drift:.0f} mm while settling.)' if drift > 10 else ''))
+        if plan['inspect']:
+            summary += f" Inspection: {len(plan['inspect'])} camera images."
+        if plan['inspect_skipped']:
+            summary += f" Skipped views: {'; '.join(plan['inspect_skipped'])}."
         return in_tray, summary
 
     def idle_until_closed(self):
@@ -658,6 +750,7 @@ def main():
     ap.add_argument('--config', default=os.path.join(BASE_DIR, 'sim_config.json'))
     ap.add_argument('--headless', action='store_true')
     ap.add_argument('--snapshots', help='directory for per-phase PNGs (headless)')
+    ap.add_argument('--feed-dir', help='where the inspection camera feed/images go (default: the --status folder)')
     args = ap.parse_args()
 
     status = Status(args.status)
@@ -667,7 +760,8 @@ def main():
             cfg = json.load(f)
         step, grasp, q_part = load_inputs(args)
         status.info['grasp'] = grasp.get('name')
-        sim = CadPickPlace(step, grasp, q_part, cfg, status, args.headless, args.snapshots)
+        feed_dir = args.feed_dir or (os.path.dirname(os.path.abspath(args.status)) if args.status else None)
+        sim = CadPickPlace(step, grasp, q_part, cfg, status, args.headless, args.snapshots, feed_dir)
         ok, summary = sim.run()
         status.update('done', summary, state='done', ok=ok)
         sim.overlay('DONE' if ok else 'FINISHED (NOT IN TRAY)', summary + '  Close this window when finished.')
@@ -685,6 +779,9 @@ def main():
         traceback.print_exc()
         status.update('failed', f'Simulator error: {type(e).__name__}: {e}', state='failed', ok=False)
         return 1
+    finally:
+        if sim is not None and sim.feed is not None:
+            sim.feed.close()
 
 
 if __name__ == '__main__':

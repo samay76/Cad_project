@@ -155,6 +155,38 @@ def add_cameras(spec):
                            rgba=[0.25, 0.25, 0.25, 1.0], contype=0, conaffinity=0)
 
 
+CAM_INSPECTION = 'cam_inspection'
+
+
+def add_inspection_camera(spec, eye, target, fovy=45.0, name=CAM_INSPECTION):
+    """Inspection camera on a small post standing on the table, looking at `target` (CAD scene only).
+
+    The robot presents the picked part at `target` in several orientations (cad_pick_place.py).
+    Visual geoms only (no contacts), plus a spot light so the part is well lit in the images.
+    """
+    eye, target = np.asarray(eye, dtype=float), np.asarray(target, dtype=float)
+    body = spec.worldbody.add_body(name=f'{name}_body', pos=eye, quat=lookat_quat(eye, target))
+    cam = body.add_camera(name=name)
+    cam.fovy = float(fovy)
+    vis = dict(contype=0, conaffinity=0)
+    # Intel RealSense D435-like housing (90 x 25 x 25 mm) behind the optical centre
+    body.add_geom(name=f'{name}_housing', type=G.mjGEOM_BOX, size=[0.045, 0.0125, 0.0125], pos=[0, 0, 0.0135],
+                  rgba=[0.75, 0.75, 0.78, 1.0], **vis)
+    body.add_geom(name=f'{name}_glass', type=G.mjGEOM_BOX, size=[0.042, 0.010, 0.001], pos=[0, 0, 0.001],
+                  rgba=[0.08, 0.08, 0.08, 1.0], **vis)
+    # Post from the table top up to the camera, and a round foot
+    h = float(eye[2]) - 0.012
+    spec.worldbody.add_geom(name=f'{name}_post', type=G.mjGEOM_CYLINDER, size=[0.008, h / 2],
+                            pos=[eye[0], eye[1], h / 2], rgba=[0.25, 0.25, 0.25, 1.0], **vis)
+    spec.worldbody.add_geom(name=f'{name}_foot', type=G.mjGEOM_CYLINDER, size=[0.035, 0.004],
+                            pos=[eye[0], eye[1], 0.004], rgba=[0.2, 0.2, 0.2, 1.0], **vis)
+    # Ring-light style spot next to the camera, aimed at the inspection point
+    d = target - eye
+    spec.worldbody.add_light(name=f'{name}_light', pos=eye + [0, 0, 0.05], dir=d / np.linalg.norm(d),
+                             diffuse=[0.6, 0.6, 0.6], specular=[0.2, 0.2, 0.2], cutoff=40, exponent=5,
+                             castshadow=False)
+
+
 _RENDERER_CACHE = {}
 
 

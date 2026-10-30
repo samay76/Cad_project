@@ -11,5 +11,22 @@
   "collision_tolerance_mm": 1.0,
   "settle_seconds": 1.5,
   "preview_seconds": 3.0,
-  "speed": 1.0
+  "speed": 1.0,
+  "inspection": {
+    "_comment": "After lifting, the robot shows the part to a camera on the table. point = where the part's centre of mass is held; views = rotations about the vertical axis (yaw) and tilts towards/away from the camera (tilt > 0 shows the top, < 0 the bottom). Views the arm cannot reach are skipped.",
+    "enabled": true,
+    "camera_pos": [0.78, -0.22, 0.175],
+    "point": [0.52, -0.22, 0.20],
+    "fovy_deg": 32,
+    "move_seconds": 4.0,
+    "hold_seconds": 0.8,
+    "views": [
+      {"label": "front", "yaw_deg": 0, "tilt_deg": 0},
+      {"label": "turned 90 deg", "yaw_deg": 90, "tilt_deg": 0},
+      {"label": "turned 180 deg", "yaw_deg": 180, "tilt_deg": 0},
+      {"label": "turned -90 deg", "yaw_deg": -90, "tilt_deg": 0},
+      {"label": "tilted: bottom", "yaw_deg": -90, "tilt_deg": -30},
+      {"label": "tilted: top", "yaw_deg": -90, "tilt_deg": 30}
+    ]
+  }
 }
