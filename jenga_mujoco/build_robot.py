@@ -9,7 +9,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def build(num_blocks=1, obj='jenga', cad_meta=None, part_pos=(0.45, -0.10, 0.03), part_quat=(1, 0, 0, 0),
-          tcp_offset_mm=145.0, gravcomp=False, fine_fingers=False, gripper='2f85', return_spec=False, extra=None):
+          tcp_offset_mm=145.0, gravcomp=False, fine_fingers=False, gripper='2f85', return_spec=False, extra=None,
+          include_sensor_cameras=True):
     """Builds the CS66 + Robotiq 2F-85 scene.
 
     obj='jenga'    : original Jenga blocks (default; teleop / recorder / eval unchanged)
@@ -76,7 +77,7 @@ def build(num_blocks=1, obj='jenga', cad_meta=None, part_pos=(0.45, -0.10, 0.03)
     else:
         raise ValueError(f"Unknown object type '{obj}' (expected 'jenga' or 'cad_part')")
 
-    add_cameras(arm)
+    add_cameras(arm, include_sensor_cameras=include_sensor_cameras)
     if extra is not None:
         extra(arm)
     if return_spec:

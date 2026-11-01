@@ -41,7 +41,7 @@ def lookat_quat(eye, target, up=np.array([0.0, 0.0, 1.0])):
     return quat
 
 
-def add_cameras(spec):
+def add_cameras(spec, include_sensor_cameras=True):
     """Configures default viewing parameters and adds all cameras to the spec:
 
     0. Default Viewer Free Camera & Full View (cam_full_view):
@@ -84,6 +84,11 @@ def add_cameras(spec):
     cam_full_body = spec.worldbody.add_body(name='cam_full_view_body', pos=eye_full, quat=q_full)
     cam_full = cam_full_body.add_camera(name=CAM_FULL_VIEW)
     cam_full.fovy = 55.0
+
+    # CAD pick-and-place uses the dedicated inspection camera instead. Keep the
+    # sensor cameras available for teleoperation and dataset collection scenes.
+    if not include_sensor_cameras:
+        return
 
     # -------------------------------------------------------------------------
     # 1. Camera 1 — Wrist Intel RealSense D405
@@ -162,24 +167,24 @@ def add_inspection_camera(spec, eye, target, fovy=45.0, name=CAM_INSPECTION):
     """Inspection camera on a small post standing on the table, looking at `target` (CAD scene only).
 
     The robot presents the picked part at `target` in several orientations (cad_pick_place.py).
-    Visual geoms only (no contacts), plus a spot light so the part is well lit in the images.
+    Collision geoms are enabled so the arm planner can reject paths through the camera and stand.
     """
     eye, target = np.asarray(eye, dtype=float), np.asarray(target, dtype=float)
     body = spec.worldbody.add_body(name=f'{name}_body', pos=eye, quat=lookat_quat(eye, target))
     cam = body.add_camera(name=name)
     cam.fovy = float(fovy)
-    vis = dict(contype=0, conaffinity=0)
+    collision = dict(contype=1, conaffinity=1)
     # Intel RealSense D435-like housing (90 x 25 x 25 mm) behind the optical centre
     body.add_geom(name=f'{name}_housing', type=G.mjGEOM_BOX, size=[0.045, 0.0125, 0.0125], pos=[0, 0, 0.0135],
-                  rgba=[0.75, 0.75, 0.78, 1.0], **vis)
+                  rgba=[0.75, 0.75, 0.78, 1.0], **collision)
     body.add_geom(name=f'{name}_glass', type=G.mjGEOM_BOX, size=[0.042, 0.010, 0.001], pos=[0, 0, 0.001],
-                  rgba=[0.08, 0.08, 0.08, 1.0], **vis)
+                  rgba=[0.08, 0.08, 0.08, 1.0], **collision)
     # Post from the table top up to the camera, and a round foot
     h = float(eye[2]) - 0.012
     spec.worldbody.add_geom(name=f'{name}_post', type=G.mjGEOM_CYLINDER, size=[0.008, h / 2],
-                            pos=[eye[0], eye[1], h / 2], rgba=[0.25, 0.25, 0.25, 1.0], **vis)
+                            pos=[eye[0], eye[1], h / 2], rgba=[0.25, 0.25, 0.25, 1.0], **collision)
     spec.worldbody.add_geom(name=f'{name}_foot', type=G.mjGEOM_CYLINDER, size=[0.035, 0.004],
-                            pos=[eye[0], eye[1], 0.004], rgba=[0.2, 0.2, 0.2, 1.0], **vis)
+                            pos=[eye[0], eye[1], 0.004], rgba=[0.2, 0.2, 0.2, 1.0], **collision)
     # Ring-light style spot next to the camera, aimed at the inspection point
     d = target - eye
     spec.worldbody.add_light(name=f'{name}_light', pos=eye + [0, 0, 0.05], dir=d / np.linalg.norm(d),

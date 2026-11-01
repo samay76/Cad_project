@@ -16,8 +16,8 @@ PART_JOINT = 'cad_part_free'
 
 # Steel-on-silicone pad contact. priority=2 > gripper pads' priority=1, so these
 # params are the ones MuJoCo uses for pad<->part contacts. condim 4 adds
-# torsional friction, which keeps the part from spinning about the pad normal.
-PART_FRICTION = [1.0, 0.01, 0.0002]
+# torsional friction, which helps keep the part from slipping during inspection turns.
+PART_FRICTION = [2.0, 0.02, 0.0005]
 PART_CONDIM = 4
 PART_PRIORITY = 2
 

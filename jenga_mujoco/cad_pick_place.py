@@ -226,7 +226,8 @@ class CadPickPlace:
 
         status.update('building', f'Building MuJoCo scene (CS66 + {GRIPPER_NAMES[self.gripper]} + part)...')
         build_kw = dict(obj='cad_part', cad_meta=self.meta, part_pos=part_pos, part_quat=part_world_quat_wxyz,
-                        tcp_offset_mm=self.tcp_offset_mm, gravcomp=True, fine_fingers=True, gripper=self.gripper)
+                        tcp_offset_mm=self.tcp_offset_mm, gravcomp=True, fine_fingers=True, gripper=self.gripper,
+                        include_sensor_cameras=False)
         model0 = build(**build_kw)
         self.fingers = finger_map(model0, self.gripper)
         ghost_geoms = collect_ghost_geoms(model0, self.fingers, self.path.pre_grip_width)
@@ -540,12 +541,43 @@ class CadPickPlace:
         for v in ins['views']:
             label = v.get('label', f"yaw {v.get('yaw_deg', 0)} tilt {v.get('tilt_deg', 0)}")
             R = rot(tilt_axis, v.get('tilt_deg', 0)) @ rot([0, 0, 1], v.get('yaw_deg', 0)) @ R0
-            try:
-                qs = self.follow(f'inspection {label}', motion(R_prev, c_prev, R, P), q_prev)
-                for q in qs[::3] + [qs[-1]]:
-                    self.check_collisions(f'inspection {label}', q, check_part=False, width_mm=width_mm)
-            except PlanError as e:
-                skipped.append(f'{label} ({str(e).split(":")[0]})')
+            tilt = v.get('tilt_deg', 0)
+            # A direct wrist tilt can cross an IK branch even when the final view is
+            # reachable. For top/bottom views, try rotating around the part first,
+            # then tilting, then unwinding the yaw while tilted. This makes the arm
+            # move around the part instead of demanding one large wrist flip.
+            yaw = v.get('yaw_deg', 0)
+            routes = [[R]]
+            if abs(tilt) > 1 or abs(yaw) > 1:
+                for via_yaw in (90, -90, 180):
+                    yaw_rot = rot([0, 0, 1], via_yaw)
+                    if abs(tilt) > 1:
+                        tilted_via = rot(tilt_axis, tilt) @ yaw_rot @ R0
+                        route = [yaw_rot @ R0, tilted_via, R]
+                    else:
+                        route = [yaw_rot @ R0, R]
+                    routes.append(route)
+
+            last_error = None
+            qs = None
+            for route in routes:
+                try:
+                    targets, R_from, c_from = [], R_prev, c_prev
+                    for R_to in route:
+                        targets.extend(motion(R_from, c_from, R_to, P))
+                        R_from, c_from = R_to, P
+                    candidate = self.follow(f'inspection {label}', targets, q_prev)
+                    # Inspection turns pass close to the camera and its post. Check
+                    # every planned waypoint so narrow obstacles cannot be skipped
+                    # between the coarser samples used for ordinary path previews.
+                    for q in candidate:
+                        self.check_collisions(f'inspection {label}', q, check_part=False, width_mm=width_mm)
+                    qs = candidate
+                    break
+                except PlanError as e:
+                    last_error = e
+            if qs is None:
+                skipped.append(f'{label} ({last_error})')
                 continue
             poses.append((label, qs))
             q_prev, R_prev, c_prev = qs[-1], R, P

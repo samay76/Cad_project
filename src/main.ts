@@ -208,12 +208,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   const detectGripMode = (samples: TrajectorySample[]): GripMode | null => {
     const final = samples[samples.length - 1];
     let k = samples.length - 1;
-    while (k > 0 && poseDistMm(samples[k - 1].pose, final.pose) < 0.5 && poseAngleDeg(samples[k - 1].pose, final.pose) < 0.5) {
+    // The pose can drift slightly while the user adjusts the fingers at the grasp.
+    // Keep those near-identical samples in the final segment, otherwise a small
+    // TCP wiggle can hide the width change and trigger the fallback prompt.
+    while (k > 0 && poseDistMm(samples[k - 1].pose, final.pose) < 2 && poseAngleDeg(samples[k - 1].pose, final.pose) < 2) {
       k--;
     }
     const preWidth = samples[k].width;
-    if (final.width > preWidth + 1) return 'inside';
-    if (final.width < preWidth - 1) return 'outside';
+    // The opening slider moves in 0.5 mm steps; detect a real slider step.
+    if (final.width > preWidth + 0.25) return 'inside';
+    if (final.width < preWidth - 0.25) return 'outside';
     return null;
   };
 

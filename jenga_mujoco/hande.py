@@ -120,7 +120,7 @@ def build_spec():
     for side in ('left', 'right'):
         s.add_exclude(bodyname1='base', bodyname2=f'{side}_finger')
     s.add_equality(type=mujoco.mjtEq.mjEQ_JOINT, name1='right_finger_joint', name2='left_finger_joint',
-                   data=np.r_[0, 1, 0, 0, 0, np.zeros(7)], solimp=[0.95, 0.99, 0.001, 0.5, 2])
+                   data=np.r_[0, 1, 0, 0, 0, np.zeros(6)], solimp=[0.95, 0.99, 0.001, 0.5, 2])
     # force = KP * (target - q) - KV * qdot, target = TRAVEL * (1 - ctrl / 255)
     act = s.add_actuator(name='fingers_actuator', target='left_finger_joint', trntype=mujoco.mjtTrn.mjTRN_JOINT,
                          gaintype=mujoco.mjtGain.mjGAIN_FIXED, biastype=mujoco.mjtBias.mjBIAS_AFFINE,
