@@ -1094,6 +1094,10 @@ html, body {
   max-width: 420px;
 }
 
+.error-message:empty {
+  display: none;
+}
+
 .error-toast.is-info {
   border-color: #bfdbfe;
   border-left-color: var(--accent-blue);
@@ -2133,6 +2137,24 @@ html, body {
 .gripper-select-btn.is-active {
   background: #2563eb;
   color: #fff;
+}
+
+/* Robot arm selector (header): same look as the gripper selector, with a label */
+.robot-select {
+  align-items: center;
+}
+
+.robot-select-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  padding: 0 8px;
+  border-right: 1px solid #cbd5e1;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
 }
 
 /* MuJoCo inspection camera panel (viewport overlay) */

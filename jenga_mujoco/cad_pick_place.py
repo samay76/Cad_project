@@ -6,6 +6,7 @@ Launched by the web app's "Simulate in MuJoCo" button (vite-plugins/mujocoBridge
 
   python cad_pick_place.py --step ../skf_cam_roller_305703_c-2z_0.stp --grasps grasps.json [--grasp-name "Grasp Pose 1"]
   python cad_pick_place.py --request runs/<id>/request.json          # what the web button does
+  add --robot ec66 to use the Elite EC66 arm instead of the CS66 (robots.py)
   add --headless --snapshots out/ to run without a window and save PNGs per phase
 
 Sequence: settle part on table -> preview ghost gripper at the taught grasp -> plan (IK + collision
@@ -34,7 +35,8 @@ import mujoco.viewer
 from build_robot import build
 from frames import (make_T, inv, T_to_pos_quat, web_pose_to_T, T_gbase_tcp, quat_xyzw_to_wxyz,
                     body_T, site_T, pose_error)
-from ik import solve as ik_solve, HOME_QPOS, N_ARM
+from ik import solve as ik_solve, N_ARM
+from robots import get_robot, ROBOTS
 from step_to_mesh import convert
 from cad_part import PART_BODY
 from taught_path import from_grasp, densify, path_length
@@ -83,7 +85,7 @@ class FingerMap:
     """Finger opening (mm between the pad faces, as in the web tool) <-> actuator ctrl <-> joint angle.
     Measured once per run in a scratch simulation, so it always matches the loaded gripper model."""
 
-    def __init__(self, model):
+    def __init__(self, model, home):
         d = mujoco.MjData(model)
         act = model.actuator('g_fingers_actuator').id
         jq = [model.jnt_qposadr[model.joint(n).id] for n in FINGER_JOINTS]
@@ -93,7 +95,7 @@ class FingerMap:
         ctrl, gap, ang = [], [], []
         for c in np.linspace(0, 255, 11):
             mujoco.mj_resetData(model, d)
-            d.qpos[:N_ARM] = d.ctrl[:N_ARM] = HOME_QPOS
+            d.qpos[:N_ARM] = d.ctrl[:N_ARM] = home
             d.ctrl[act] = c
             for _ in range(int(1.0 / model.opt.timestep)):
                 mujoco.mj_step(model, d)
@@ -135,14 +137,14 @@ class HandeFingerMap:
         qpos[self.qadr] = self.angle_for(width_mm)
 
 
-def finger_map(model, gripper):
-    return HandeFingerMap(model) if gripper == 'hande' else FingerMap(model)
+def finger_map(model, gripper, home):
+    return HandeFingerMap(model) if gripper == 'hande' else FingerMap(model, home)
 
 
-def collect_ghost_geoms(model, fingers, width_mm):
+def collect_ghost_geoms(model, fingers, width_mm, home):
     """Gripper visual meshes + pads, as (kind, meshname|size, T_gbase_geom), fingers at width_mm."""
     data = mujoco.MjData(model)
-    data.qpos[:N_ARM] = HOME_QPOS
+    data.qpos[:N_ARM] = home
     fingers.set_qpos(data.qpos, width_mm)
     mujoco.mj_forward(model, data)
     T_wb_inv = inv(body_T(model, data, 'g_base'))
@@ -188,12 +190,20 @@ def add_ghost(spec, ghost_geoms, T_gb_tcp):
 # --------------------------------------------------------------------------------------------
 class CadPickPlace:
     def __init__(self, step_path, grasp, part_world_quat_wxyz, cfg, status, headless=False, snapshots=None,
-                 feed_dir=None):
+                 feed_dir=None, robot=None):
         self.cfg, self.status, self.grasp = cfg, status, grasp
+        try:
+            self.robot = get_robot(robot)
+        except ValueError as e:
+            raise PlanError(str(e)) from None
+        self.home = self.robot.home_qpos
+        status.info['robot'] = self.robot.label
         self.insp = dict(cfg.get('inspection') or {})
         self.feed_dir, self.feed = feed_dir, None
         self.headless, self.snap_dir = headless, snapshots
         self.viewer = self.renderer = None
+        self._feed_mtime = 0.0
+        self._feed_viewport_size = None
         self.speed = float(cfg.get('speed', 1.0))
 
         status.update('converting', f'Converting {os.path.basename(step_path)} to meshes (cached after first run)...')
@@ -224,13 +234,13 @@ class CadPickPlace:
         px, py = cfg['pick_xy']
         part_pos = [px - c[0], py - c[1], -rv.min(0)[2] + 0.002]
 
-        status.update('building', f'Building MuJoCo scene (CS66 + {GRIPPER_NAMES[self.gripper]} + part)...')
+        status.update('building', f'Building MuJoCo scene ({self.robot.label} + {GRIPPER_NAMES[self.gripper]} + part)...')
         build_kw = dict(obj='cad_part', cad_meta=self.meta, part_pos=part_pos, part_quat=part_world_quat_wxyz,
                         tcp_offset_mm=self.tcp_offset_mm, gravcomp=True, fine_fingers=True, gripper=self.gripper,
-                        include_sensor_cameras=False)
+                        include_sensor_cameras=False, robot=self.robot.id)
         model0 = build(**build_kw)
-        self.fingers = finger_map(model0, self.gripper)
-        ghost_geoms = collect_ghost_geoms(model0, self.fingers, self.path.pre_grip_width)
+        self.fingers = finger_map(model0, self.gripper, self.home)
+        ghost_geoms = collect_ghost_geoms(model0, self.fingers, self.path.pre_grip_width, self.home)
         def extra(s):
             add_ghost(s, ghost_geoms, self.T_gb_tcp)
             if self.insp.get('enabled'):
@@ -249,15 +259,16 @@ class CadPickPlace:
         self.ghost_geom_ids = [g for g in range(m.ngeom) if m.geom(g).name.startswith('ghost_')
                                and not m.geom(g).name.startswith('ghost_axis')]
         self.part_bid = m.body(PART_BODY).id
-        self.robot_root = m.body('base_link').id
-        self.ignore_env_bodies = {m.body('base_link').id, m.body('shoulder_link').id}
+        self.robot_root = m.body(self.robot.base_bodies[0]).id
+        self.ignore_env_bodies = {m.body(b).id for b in self.robot.base_bodies}
         self.pad_geoms = {g for g in range(m.ngeom) if m.geom(g).name.startswith(('g_left_pad', 'g_right_pad'))}
 
-        self.data.qpos[:N_ARM] = HOME_QPOS
-        self.data.ctrl[:N_ARM] = HOME_QPOS
+        self.data.qpos[:N_ARM] = self.home
+        self.data.ctrl[:N_ARM] = self.home
         self.data.ctrl[self.grip_act] = GRIP_OPEN
         mujoco.mj_forward(m, self.data)
         self.path_points = []  # taught TCP path in world (drawn as dots)
+        self.transfer_T = None  # TCP path inspection -> tray (plan_transfer)
 
     # ---------------- stepping / display ----------------
     def open_viewer(self):
@@ -296,6 +307,28 @@ class CadPickPlace:
         cam.lookat[:] = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2, 0.08]
         cam.distance, cam.azimuth, cam.elevation = 0.95, 140, -28
 
+    def _update_camera_inset(self):
+        """Overlay the latest inspection-camera frame in the viewer's upper-left corner."""
+        if self.viewer is None or not self.feed_dir:
+            return
+        feed_path = os.path.join(self.feed_dir, 'feed.jpg')
+        viewport = self.viewer.viewport
+        viewport_size = (viewport.width, viewport.height)
+        resized = viewport_size != self._feed_viewport_size
+        try:
+            mtime = os.path.getmtime(feed_path)
+            if mtime <= self._feed_mtime and not resized:
+                return
+            from PIL import Image
+            with Image.open(feed_path) as source:
+                image = np.asarray(source.convert('RGB').resize((320, 240)))
+        except (FileNotFoundError, OSError):
+            return
+        inset = mujoco.MjrRect(12, max(0, viewport.height - 252), 320, 240)
+        self.viewer.set_images((inset, image))
+        self._feed_mtime = mtime
+        self._feed_viewport_size = viewport_size
+
     def overlay(self, title, detail=''):
         self._title, self._detail = title, detail
         if self.viewer is not None:
@@ -326,6 +359,7 @@ class CadPickPlace:
             if self.viewer is not None and i % 8 == 0:
                 if not self.viewer.is_running():
                     raise KeyboardInterrupt
+                self._update_camera_inset()
                 self.viewer.sync()
                 lag = (i + 1) * m.opt.timestep / self.speed - (time.time() - t0)
                 if lag > 0:
@@ -464,11 +498,13 @@ class CadPickPlace:
 
         self.targets = dict(grasp=T_grasp, pre=Ts_w[0])
         start = 'start of recording' if path.recorded else 'pre-grasp'
-        q_start = self.ik(start, Ts_w[0], [HOME_QPOS])
+        q_start = self.ik(start, Ts_w[0], [self.home])
         q_approach = self.follow('taught approach' if path.recorded else 'approach', Ts_w[1:], q_start)
         q_lift = self.line('lift', T_grasp, T_lift, q_approach[-1])
         inspect, skipped = self.plan_inspection(T_wp, q_lift[-1], path.pre_grip_width)
-        q_above = self.ik('above place', T_above_place, [q_lift[-1]])
+        q_transfer = self.plan_transfer(inspect[-1][1][-1] if inspect else q_lift[-1], T_above_place,
+                                        q_lift[-1], path.pre_grip_width)
+        q_above = q_transfer[-1]
         q_down = self.line('place', T_above_place, T_place, q_above)
 
         # Retreat = taught path backwards, relative to where the part is placed.
@@ -497,7 +533,7 @@ class CadPickPlace:
         for i, q in enumerate(q_down[-3:]):
             self.check_collisions(f'place ({i + 1}/3)', q, check_part=False, width_mm=path.pre_grip_width)
 
-        return dict(inspect=inspect, inspect_skipped=skipped,
+        return dict(inspect=inspect, inspect_skipped=skipped, transfer=q_transfer,
                     start=q_start, approach=q_approach, approach_w=ws[1:], approach_T=Ts_w,
                     lift=q_lift, above=q_above, down=q_down, retreat=q_retreat, retreat_w=rev_w, retreat_T=rev_T)
 
@@ -582,6 +618,50 @@ class CadPickPlace:
             poses.append((label, qs))
             q_prev, R_prev, c_prev = qs[-1], R, P
         return poses, skipped
+
+    def plan_transfer(self, q_from, T_to, q_lift_end, width_mm):
+        """Arm waypoints from the end of the inspection to above the tray. The part is first turned back
+        in place (about its COM) to the orientation it is placed with, then carried in a straight line,
+        so it never swings through orientations where its weight pulls it off the fingers (one big joint
+        move from a tilted inspection view can do that, depending on the arm's kinematics).
+        Falls back to a single joint move if that path is not feasible."""
+        from scipy.spatial.transform import Rotation, Slerp
+        m, s = self.model, self.scratch
+        saved = s.qpos.copy()
+        s.qpos[:N_ARM] = q_from
+        mujoco.mj_kinematics(m, s)
+        T_from = site_T(m, s, TCP_SITE)
+        s.qpos[:] = saved
+        com = np.asarray(self.meta['com_m'])
+        P_from, P_to = T_from @ inv(self.T_part_tcp), T_to @ inv(self.T_part_tcp)
+        c = P_from[:3, :3] @ com + P_from[:3, 3]
+        R_a, R_b = P_from[:3, :3], P_to[:3, :3]
+        ang = np.degrees(Rotation.from_matrix(R_a.T @ R_b).magnitude())
+        sl = Slerp([0, 1], Rotation.from_matrix([R_a, R_b]))
+        Ts = []
+        n_rot = int(np.ceil(ang / 8.0))
+        for i in range(1, n_rot + 1):
+            R = sl(i / n_rot).as_matrix()
+            T_part = np.eye(4)
+            T_part[:3, :3] = R
+            T_part[:3, 3] = c - R @ com
+            Ts.append(T_part @ self.T_part_tcp)
+        T_a = Ts[-1] if Ts else T_from
+        n_lin = max(1, int(np.ceil(np.linalg.norm(T_to[:3, 3] - T_a[:3, 3]) / 0.02)))
+        for i in range(1, n_lin + 1):
+            T = T_to.copy()
+            T[:3, 3] = T_a[:3, 3] + (T_to[:3, 3] - T_a[:3, 3]) * i / n_lin
+            Ts.append(T)
+        try:
+            qs = self.follow('transfer', Ts, q_from)
+            for i, q in enumerate(qs):
+                self.check_collisions(f'transfer ({i + 1}/{len(qs)})', q, check_part=False, width_mm=width_mm)
+            self.transfer_T = [T_from] + Ts
+            return qs
+        except PlanError as e:
+            print(f'Turning the part upright before the transfer not possible ({e}); moving directly.', flush=True)
+            self.transfer_T = None
+            return [self.ik('above place', T_to, [q_lift_end])]
 
     def depth_hint(self, T, width_mm, q_seed, max_mm=40):
         """How far back along the TCP approach axis the colliding pose would be free (the finger is in too deep)."""
@@ -704,7 +784,16 @@ class CadPickPlace:
                                 '(more finger contact) or fewer/smaller inspection tilts in sim_config.json.')
 
         self.phase('transfer', 'Carrying the part to the tray...')
-        self.move([plan['above']], 3.0, grip_ctrl)
+        secs = 3.0
+        if self.transfer_T is not None:
+            lin, ang = path_length(self.transfer_T)
+            secs = lin / 0.15 + ang / 45.0
+        # Cosine time scaling peaks at pi/2 x the mean speed: keep every joint under ~0.5 rad/s so the
+        # (force-limited) wrist can follow and the part is not swung around.
+        qs = np.vstack([self.data.ctrl[:N_ARM]] + list(plan['transfer']))
+        joint_travel = float(np.abs(np.diff(qs, axis=0)).sum(axis=0).max())
+        secs = float(np.clip(max(secs, np.pi / 2 * joint_travel / 0.5), 3.0, 20.0))
+        self.move(plan['transfer'], secs, grip_ctrl)
         slip_mm, slip_deg = pose_error(inv(site_T(self.model, self.data, TCP_SITE)) @ self.part_T(), T_tcp_part0)
         st.info['slip_during_transport'] = {'mm': round(slip_mm, 2), 'deg': round(slip_deg, 2)}
 
@@ -716,7 +805,7 @@ class CadPickPlace:
         self.phase('retreat', 'Retreating along your taught path in reverse...' if path.recorded else 'Retreating...')
         self.move(plan['retreat'], self.path_seconds(plan['retreat_T'], 1.5),
                   [fm.ctrl_for(w) for w in plan['retreat_w']])
-        self.move([HOME_QPOS], 2.5, GRIP_OPEN)
+        self.move([self.home], 2.5, GRIP_OPEN)
         self.step(0.8)
         self.snapshot('04_done')
 
@@ -732,7 +821,7 @@ class CadPickPlace:
             summary += f" Inspection: {len(plan['inspect'])} camera images."
         if plan['inspect_skipped']:
             summary += f" Skipped views: {'; '.join(plan['inspect_skipped'])}."
-        return in_tray, summary
+        return bool(in_tray), summary
 
     def idle_until_closed(self):
         if self.viewer is None:
@@ -751,6 +840,7 @@ def load_inputs(args):
             req = json.load(f)
         grasp, step = req['grasp'], req['partFile']
         pwp = req.get('partWorldPose')
+        robot = args.robot or req.get('robotId')
     else:
         if not (args.step and args.grasps):
             raise SystemExit('Give --request, or --step and --grasps')
@@ -764,11 +854,11 @@ def load_inputs(args):
             grasp = match[0]
         else:
             grasp = grasps[args.grasp_index]
-        step, pwp = args.step, None
+        step, pwp, robot = args.step, None, args.robot
     if not grasp.get('tcpPose'):
         raise SystemExit('Grasp has no tcpPose')
     q = quat_xyzw_to_wxyz([pwp['orientation'][k] for k in 'xyzw']) if pwp else np.array([1.0, 0, 0, 0])
-    return step, grasp, q
+    return step, grasp, q, robot
 
 
 def main():
@@ -779,6 +869,7 @@ def main():
     ap.add_argument('--grasps', help='grasps JSON exported from the web app (manual mode)')
     ap.add_argument('--grasp-name')
     ap.add_argument('--grasp-index', type=int, default=0)
+    ap.add_argument('--robot', choices=list(ROBOTS), help='robot arm (default: robotId of the request, else cs66)')
     ap.add_argument('--config', default=os.path.join(BASE_DIR, 'sim_config.json'))
     ap.add_argument('--headless', action='store_true')
     ap.add_argument('--snapshots', help='directory for per-phase PNGs (headless)')
@@ -790,10 +881,10 @@ def main():
     try:
         with open(args.config) as f:
             cfg = json.load(f)
-        step, grasp, q_part = load_inputs(args)
+        step, grasp, q_part, robot = load_inputs(args)
         status.info['grasp'] = grasp.get('name')
         feed_dir = args.feed_dir or (os.path.dirname(os.path.abspath(args.status)) if args.status else None)
-        sim = CadPickPlace(step, grasp, q_part, cfg, status, args.headless, args.snapshots, feed_dir)
+        sim = CadPickPlace(step, grasp, q_part, cfg, status, args.headless, args.snapshots, feed_dir, robot=robot)
         ok, summary = sim.run()
         status.update('done', summary, state='done', ok=ok)
         sim.overlay('DONE' if ok else 'FINISHED (NOT IN TRAY)', summary + '  Close this window when finished.')

@@ -1,0 +1,86 @@
+<!--
+  Elite Robots EC66 (6 kg payload, 914 mm reach), MuJoCo model.
+
+  Converted by hand from the official URDF in github.com/Elite-Robots/ROS
+  (src/elite_description/urdf/ec66_description.urdf, copied here as ec66_description.urdf),
+  same meshes (meters). Kinematics checked against RoboDK's Elite-Robots-EC66.robot:
+  d1 = 96, a2 = 418, a3 = 398, d4 = 122, d5 = 98, d6 = 89 mm.
+
+  Bodies base_link, link1 .. link6. The tool flange is on link6 at the URDF fixed joint flan_joint
+  (xyz 0 -0.089 0, rpy -90deg 0 180deg), +Z pointing out of the flange; robots.py adds the
+  gripper mount site there.
+  Actuators and joint damping are added by build_robot.py (same as the CS66).
+-->
+<mujoco model="ec66">
+  <compiler angle="radian"/>
+  <option cone="elliptic" impratio="10"/>
+
+  <default>
+    <default class="ec66">
+      <geom type="mesh" rgba="0.89 0.91 0.93 1"/>
+    </default>
+  </default>
+
+  <asset>
+    <mesh name="ec66_base" file="meshes/base_link.stl"/>
+    <mesh name="ec66_link1" file="meshes/link1.stl"/>
+    <mesh name="ec66_link2" file="meshes/link2.stl"/>
+    <mesh name="ec66_link3" file="meshes/link3.stl"/>
+    <mesh name="ec66_link4" file="meshes/link4.stl"/>
+    <mesh name="ec66_link5" file="meshes/link5.stl"/>
+    <mesh name="ec66_link6" file="meshes/link6.stl"/>
+  </asset>
+
+  <worldbody>
+    <body name="base_link" childclass="ec66">
+      <inertial pos="0.00039768 0 0.012605" mass="0.41542"
+                fullinertia="0.00054632 0.00053741 0.0010336 -4.5067e-09 5.9528e-07 -3.5275e-10"/>
+      <geom mesh="ec66_base" rgba="0.3 0.32 0.35 1"/>
+      <body name="link1" pos="0 0 0.096">
+        <inertial pos="-3.9337e-06 0.0082614 0.0028405" mass="1.7827"
+                  fullinertia="0.0031691 0.0029334 0.0035086 -1.2175e-07 2.8351e-08 -0.00037927"/>
+        <joint name="joint1" axis="0 0 1" range="-6.2832 6.2832" actuatorfrcrange="-150 150"/>
+        <geom mesh="ec66_link1"/>
+        <body name="link2" pos="0 0.122 0" quat="0.707107 0 0.707107 0">
+          <inertial pos="2.17e-06 0.017318 0.17637" mass="4.8843"
+                    fullinertia="0.022101 0.022526 0.0066105 1.2727e-07 1.0833e-07 -0.00021178"/>
+          <joint name="joint2" axis="0 1 0" range="-6.2832 6.2832" actuatorfrcrange="-150 150"/>
+          <geom mesh="ec66_link2"/>
+          <body name="link3" pos="0 -0.122 0.418">
+            <inertial pos="-7.9845e-06 0.028008 0.20069" mass="2.1495"
+                      fullinertia="0.0091566 0.0091573 0.0015747 -1.4815e-07 -2.8912e-08 7.3471e-05"/>
+            <joint name="joint3" axis="0 1 0" range="-2.7925 2.7925" actuatorfrcrange="-150 150"/>
+            <geom mesh="ec66_link3"/>
+            <body name="link4" pos="0 0 0.398" quat="0.707107 0 0.707107 0">
+              <inertial pos="5.2272e-07 0.11599 -0.00070291" mass="0.53436"
+                        fullinertia="0.00041486 0.00037669 0.0004403 1.1841e-09 4.7177e-09 -5.8283e-05"/>
+              <joint name="joint4" axis="0 1 0" range="-6.2832 6.2832" actuatorfrcrange="-28 28"/>
+              <geom mesh="ec66_link4"/>
+              <body name="link5" pos="0 0.122 0">
+                <inertial pos="5.2281e-07 0.00070291 0.091994" mass="0.53436"
+                          fullinertia="0.00041486 0.0004403 0.00037669 -4.6787e-09 1.1523e-09 5.8283e-05"/>
+                <joint name="joint5" axis="0 0 1" range="-6.2832 6.2832" actuatorfrcrange="-28 28"/>
+                <geom mesh="ec66_link5"/>
+                <body name="link6" pos="0 0 0.098">
+                  <inertial pos="1.7828e-08 -0.067831 -2.6091e-05" mass="0.16488"
+                            fullinertia="7.7869e-05 0.00011744 7.757e-05 1.9128e-10 -3.3406e-10 -7.8331e-08"/>
+                  <joint name="joint6" axis="0 -1 0" range="-6.2832 6.2832" actuatorfrcrange="-28 28"/>
+                  <geom mesh="ec66_link6" rgba="0.79 0.82 0.93 1"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <contact>
+    <exclude body1="base_link" body2="link1"/>
+    <exclude body1="link1" body2="link2"/>
+    <exclude body1="link2" body2="link3"/>
+    <exclude body1="link3" body2="link4"/>
+    <exclude body1="link4" body2="link5"/>
+    <exclude body1="link5" body2="link6"/>
+  </contact>
+</mujoco>

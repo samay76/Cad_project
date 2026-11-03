@@ -4,14 +4,15 @@ import mujoco, mujoco.viewer
 from world import add_world
 from cameras import add_cameras
 from frames import T_gbase_tcp, T_to_pos_quat
+from robots import get_robot, ROBOTS, DEFAULT_ROBOT
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def build(num_blocks=1, obj='jenga', cad_meta=None, part_pos=(0.45, -0.10, 0.03), part_quat=(1, 0, 0, 0),
           tcp_offset_mm=145.0, gravcomp=False, fine_fingers=False, gripper='2f85', return_spec=False, extra=None,
-          include_sensor_cameras=True):
-    """Builds the CS66 + Robotiq 2F-85 scene.
+          include_sensor_cameras=True, robot=DEFAULT_ROBOT):
+    """Builds the arm + gripper scene (default: CS66 + Robotiq 2F-85).
 
     obj='jenga'    : original Jenga blocks (default; teleop / recorder / eval unchanged)
     obj='cad_part' : a converted STEP part (cad_meta from step_to_mesh.convert) on a free joint
@@ -20,9 +21,11 @@ def build(num_blocks=1, obj='jenga', cad_meta=None, part_pos=(0.45, -0.10, 0.03)
     fine_fingers   : decompose the finger meshes into several convex pieces (finger_collision.py) so
                      thin fingertips fit where they really fit (inside grips); off for Jenga
     gripper        : '2f85' (Menagerie Robotiq 2F-85, default) or 'hande' (Robotiq Hand-E, hande.py)
+    robot          : arm id from robots.py: 'cs66' (default) or 'ec66'
     extra(spec)    : optional callback to add more elements (e.g. the ghost gripper) before compiling
     """
-    arm_xml = os.path.join(BASE_DIR, 'cs66', 'cs66.xml')
+    rob = get_robot(robot)
+    arm_xml = rob.xml_path
     grip_xml = os.path.join(BASE_DIR, 'robotiq_2f85', '2f85.xml')
     arm = mujoco.MjSpec.from_file(arm_xml)
     if gripper == 'hande':
@@ -33,9 +36,7 @@ def build(num_blocks=1, obj='jenga', cad_meta=None, part_pos=(0.45, -0.10, 0.03)
     else:
         raise ValueError(f"Unknown gripper '{gripper}' (expected '2f85' or 'hande')")
 
-    KP = [2000, 2000, 1500, 400, 400, 200]   # starting guesses
-    KV = [200, 200, 150, 40, 40, 20]
-    for j, kp, kv in zip(list(arm.joints)[:6], KP, KV):
+    for j, kp, kv in zip(list(arm.joints)[:6], rob.kp, rob.kv):
         j.damping = [kv, 0, 0]
         a = arm.add_actuator(name='act_' + j.name, target=j.name,
                              trntype=mujoco.mjtTrn.mjTRN_JOINT,
@@ -58,8 +59,8 @@ def build(num_blocks=1, obj='jenga', cad_meta=None, part_pos=(0.45, -0.10, 0.03)
         from finger_collision import refine
         refine(grip)
 
-    site = arm.body('wrist_3_link').add_site(
-        name='gripper_mount', pos=[0, 0, 0], quat=[1, 0, 0, 0])
+    site = arm.body(rob.flange_body).add_site(
+        name='gripper_mount', pos=list(rob.flange_pos), quat=list(rob.flange_quat))
     arm.attach(grip, site=site, prefix='g_')
     if gravcomp:
         for b in arm.bodies:
@@ -77,7 +78,8 @@ def build(num_blocks=1, obj='jenga', cad_meta=None, part_pos=(0.45, -0.10, 0.03)
     else:
         raise ValueError(f"Unknown object type '{obj}' (expected 'jenga' or 'cad_part')")
 
-    add_cameras(arm, include_sensor_cameras=include_sensor_cameras)
+    add_cameras(arm, include_sensor_cameras=include_sensor_cameras, wrist_body=rob.flange_body,
+                flange_pos=rob.flange_pos, flange_quat=rob.flange_quat)
     if extra is not None:
         extra(arm)
     if return_spec:
@@ -89,6 +91,7 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--object', choices=['jenga', 'cad_part'], default='jenga')
     ap.add_argument('--gripper', choices=['2f85', 'hande'], default='2f85')
+    ap.add_argument('--robot', choices=list(ROBOTS), default=DEFAULT_ROBOT)
     ap.add_argument('--step', default=os.path.join(BASE_DIR, '..', 'skf_cam_roller_305703_c-2z_0.stp'))
     args = ap.parse_args()
 
@@ -96,8 +99,8 @@ if __name__ == '__main__':
     if args.object == 'cad_part':
         from step_to_mesh import convert
         meta = convert(args.step)
-    model = build(obj=args.object, cad_meta=meta, gripper=args.gripper)
+    model = build(obj=args.object, cad_meta=meta, gripper=args.gripper, robot=args.robot)
     print('bodies:', model.nbody, 'joints:', model.njnt, 'actuators:', model.nu, 'cameras:', model.ncam)
-    if args.object == 'jenga':
+    if args.object == 'jenga' and args.robot == 'cs66' and args.gripper == '2f85':
         mujoco.mj_saveModel(model, 'cs66_2f85.mjb')
     mujoco.viewer.launch(model)

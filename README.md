@@ -129,6 +129,8 @@ nferent_cad/
 
 ## Setup & Running Locally
 
+This project requires **Node.js 20 or newer**. If you use `nvm`, run `nvm install` and `nvm use` from the project directory; `.nvmrc` selects the supported version. Check the active version with `node --version` before installing or running the project.
+
 1. **Install Dependencies**:
    ```bash
    npm install

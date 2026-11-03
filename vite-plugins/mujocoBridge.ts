@@ -1,7 +1,7 @@
 /**
  * MuJoCo bridge (dev server only).
  *
- * POST /api/mujoco/simulate  { grasp, partFileName, partFileBase64, partWorldPose }
+ * POST /api/mujoco/simulate  { grasp, robotId, partFileName, partFileBase64, partWorldPose }
  *   -> writes jenga_mujoco/runs/<runId>/{part.stp, request.json}
  *   -> spawns `python jenga_mujoco/cad_pick_place.py --request ... --status ...`
  *      which opens a MuJoCo viewer window on this machine's display.
@@ -76,6 +76,11 @@ export function mujocoBridgePlugin(): Plugin {
               return sendJson(res, 400, { ok: false, message: 'Missing grasp or part file in request.' });
             }
 
+            const robotId = body.robotId ?? 'cs66';
+            if (typeof robotId !== 'string' || !/^[a-z0-9_]+$/.test(robotId)) {
+              return sendJson(res, 400, { ok: false, message: 'Invalid robotId.' });
+            }
+
             // Only one simulator window at a time.
             if (child && child.exitCode === null) child.kill('SIGTERM');
 
@@ -95,6 +100,7 @@ export function mujocoBridgePlugin(): Plugin {
                   partFile: partPath,
                   partFileName: body.partFileName,
                   partWorldPose: body.partWorldPose ?? null,
+                  robotId,
                   grasp: body.grasp
                 },
                 null,

@@ -11,7 +11,15 @@ import { GripperLoader } from './gripper/GripperLoader';
 import { GraspController } from './gripper/GraspController';
 import { PartController } from './part/PartController';
 import type { SavedGrasp, ClickedPointInfo, GripperState, TrajectorySample, GripMode, Pose } from './types';
-import { GRIPPERS, applyGripperSpec, getStoredGripperId, type GripperId } from './config';
+import {
+  GRIPPERS,
+  ROBOTS,
+  applyGripperSpec,
+  getStoredGripperId,
+  getStoredRobotId,
+  storeRobotId,
+  type GripperId
+} from './config';
 import './styles.css';
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -37,6 +45,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let savedGrasps: SavedGrasp[] = [];
   let activeGripperId: GripperId = getStoredGripperId();
   applyGripperSpec(GRIPPERS[activeGripperId]);
+  let activeRobotId = getStoredRobotId();
 
   // Persistence helpers
   const STORAGE_KEY = 'nferent_cad_saved_grasps';
@@ -385,7 +394,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           simPollTimer = null;
           cameraPanel?.finish(st.message || '');
           if (st.ok) {
-            layout?.showInfo('MuJoCo simulation finished', st.message || 'Pick & place completed.');
+            layout?.showInfo('MuJoCo simulation finished', '');
           } else {
             layout?.showError(st.message || 'Simulation failed (see terminal running npm run dev).', 'MuJoCo simulation failed');
           }
@@ -420,13 +429,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     const quat = new THREE.Quaternion();
     root.matrixWorld.decompose(pos, quat, new THREE.Vector3());
 
-    layout?.showInfo('MuJoCo simulation', 'Starting simulator (first run converts the STEP mesh, ~30 s)...');
+    layout?.showInfo(
+      'MuJoCo simulation',
+      `Starting simulator: ${ROBOTS[activeRobotId].label} + ${GRIPPERS[grasp.gripperId ?? '2f85'].label} (first run converts the STEP mesh, ~30 s)...`
+    );
     try {
       const resp = await fetch('/api/mujoco/simulate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           grasp,
+          robotId: activeRobotId,
           partFileName: currentModelName,
           partFileBase64: arrayBufferToBase64(currentModelBuffer),
           partWorldPose: {
@@ -528,6 +541,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     onGripperSelect: (id) => {
       selectGripper(id);
     },
+    onRobotSelect: (id) => {
+      activeRobotId = id;
+      storeRobotId(id);
+      layout?.setActiveRobot(id);
+      layout?.showInfo('Robot arm', `${ROBOTS[id].label} selected: ▶ Simulate in MuJoCo runs the pick & place with it.`);
+    },
     onTransformModeToggle: (mode) => {
       graspController?.setTransformMode(mode);
     },
@@ -551,6 +570,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   layout.setActiveGripper(activeGripperId);
+  layout.setActiveRobot(activeRobotId);
 
   // 2. Initialize 3D Viewer into viewport container
   viewer = new Viewer(layout.viewportContainer);

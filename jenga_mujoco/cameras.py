@@ -41,7 +41,8 @@ def lookat_quat(eye, target, up=np.array([0.0, 0.0, 1.0])):
     return quat
 
 
-def add_cameras(spec, include_sensor_cameras=True):
+def add_cameras(spec, include_sensor_cameras=True, wrist_body='wrist_3_link', flange_pos=(0.0, 0.0, 0.0),
+                flange_quat=(1.0, 0.0, 0.0, 0.0)):
     """Configures default viewing parameters and adds all cameras to the spec:
 
     0. Default Viewer Free Camera & Full View (cam_full_view):
@@ -52,7 +53,7 @@ def add_cameras(spec, include_sensor_cameras=True):
 
     1. Camera 1 (cam_wrist_d405):
        - Model: Intel RealSense D405
-       - Mounting: On wrist_3_link
+       - Mounting: On the tool flange (wrist_body at flange_pos/flange_quat; wrist_3_link for the CS66)
        - View: Close-up, ego-centric view of grasp and placement
        - FOV: 58° vertical (approx 87° x 58° RGB/depth)
 
@@ -93,12 +94,18 @@ def add_cameras(spec, include_sensor_cameras=True):
     # -------------------------------------------------------------------------
     # 1. Camera 1 — Wrist Intel RealSense D405
     # -------------------------------------------------------------------------
-    wrist = spec.body('wrist_3_link')
+    wrist = spec.body(wrist_body)
     eye1 = np.array([0.0, -0.07, 0.04])       # Mounted offset on wrist flange
     tgt1 = np.array([0.0, 0.0, 0.16])        # Grasp center between finger pads
     q1 = lookat_quat(eye1, tgt1, up=[0.0, 0.0, 1.0])
+    # flange frame -> wrist body frame
+    fq = np.asarray(flange_quat, dtype=np.float64)
+    p1, qw1 = np.zeros(3), np.zeros(4)
+    mujoco.mju_rotVecQuat(p1, eye1, fq)
+    p1 += np.asarray(flange_pos, dtype=np.float64)
+    mujoco.mju_mulQuat(qw1, fq, np.asarray(q1, dtype=np.float64))
 
-    cam1_body = wrist.add_body(name='cam_wrist_body', pos=eye1, quat=q1)
+    cam1_body = wrist.add_body(name='cam_wrist_body', pos=p1, quat=qw1)
     cam1 = cam1_body.add_camera(name=CAM_WRIST)
     cam1.fovy = 58.0
 

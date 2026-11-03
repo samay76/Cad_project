@@ -101,6 +101,44 @@ export const GRIPPERS: Record<GripperId, GripperSpec> = {
   }
 };
 
+/**
+ * Robot arms for the MuJoCo pick & place (jenga_mujoco/robots.py). The arm does not change the taught
+ * grasp (it is relative to the part); it only decides which arm executes it in the simulator.
+ */
+export type RobotId = 'cs66' | 'ec66';
+
+export interface RobotSpec {
+  id: RobotId;
+  label: string;
+  payloadKg: number;
+  reachMm: number;
+}
+
+export const ROBOTS: Record<RobotId, RobotSpec> = {
+  cs66: { id: 'cs66', label: 'Elite CS66', payloadKg: 6, reachMm: 914 },
+  ec66: { id: 'ec66', label: 'Elite EC66', payloadKg: 6, reachMm: 914 }
+};
+
+const ROBOT_STORAGE_KEY = 'nferent_cad_robot';
+
+export const getStoredRobotId = (): RobotId => {
+  try {
+    const id = localStorage.getItem(ROBOT_STORAGE_KEY);
+    if (id && id in ROBOTS) return id as RobotId;
+  } catch {
+    // ignore storage errors
+  }
+  return 'cs66';
+};
+
+export const storeRobotId = (id: RobotId) => {
+  try {
+    localStorage.setItem(ROBOT_STORAGE_KEY, id);
+  } catch {
+    // ignore storage errors
+  }
+};
+
 const GRIPPER_STORAGE_KEY = 'nferent_cad_gripper';
 
 export const getStoredGripperId = (): GripperId => {

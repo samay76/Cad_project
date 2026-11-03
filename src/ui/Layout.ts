@@ -1,4 +1,4 @@
-import { GRIPPERS, type GripperId } from '../config';
+import { GRIPPERS, ROBOTS, type GripperId, type RobotId } from '../config';
 
 export interface LayoutCallbacks {
   onFileSelected: (file: File) => void;
@@ -6,6 +6,7 @@ export interface LayoutCallbacks {
   onUrlSelected: (url: string) => void;
   onLoadGripperClick: () => void;
   onGripperSelect: (id: GripperId) => void;
+  onRobotSelect: (id: RobotId) => void;
   onTransformModeToggle: (mode: 'translate' | 'rotate') => void;
   onTargetToggle?: (target: 'part' | 'gripper') => void;
   onSnapPointClick: () => void;
@@ -102,6 +103,17 @@ export class AppLayout {
                   .map(
                     (g) =>
                       `<button class="gripper-select-btn" data-gripper="${g.id}" title="Use the ${g.label} (opening 0-${g.maxOpeningWidth} mm)">${g.label.replace('Robotiq ', '')}</button>`
+                  )
+                  .join('')}
+              </div>
+
+              <!-- ROBOT ARM SELECTOR (used by the MuJoCo simulation) -->
+              <div class="gripper-select robot-select" role="group" aria-label="Robot arm" title="Robot arm used in the MuJoCo simulation">
+                <span class="robot-select-label">Robot</span>
+                ${Object.values(ROBOTS)
+                  .map(
+                    (r) =>
+                      `<button class="gripper-select-btn robot-select-btn" data-robot="${r.id}" title="Simulate with the ${r.label} (${r.payloadKg} kg payload, ${r.reachMm} mm reach)">${r.label.replace('Elite ', '')}</button>`
                   )
                   .join('')}
               </div>
@@ -372,7 +384,15 @@ export class AppLayout {
       });
     }
 
-    this.root.querySelectorAll<HTMLButtonElement>('.gripper-select-btn').forEach((btn) => {
+    this.root.querySelectorAll<HTMLButtonElement>('.robot-select-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!btn.classList.contains('is-active')) {
+          this.callbacks.onRobotSelect(btn.dataset.robot as RobotId);
+        }
+      });
+    });
+
+    this.root.querySelectorAll<HTMLButtonElement>('.gripper-select-btn[data-gripper]').forEach((btn) => {
       btn.addEventListener('click', () => {
         if (!btn.classList.contains('is-active')) {
           this.callbacks.onGripperSelect(btn.dataset.gripper as GripperId);
@@ -599,9 +619,16 @@ export class AppLayout {
     this.gripperStatusBadge.classList.toggle('active', loaded);
   }
 
+  /** Highlights the robot arm used for the MuJoCo simulation. */
+  public setActiveRobot(id: RobotId) {
+    this.root.querySelectorAll<HTMLButtonElement>('.robot-select-btn').forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.robot === id);
+    });
+  }
+
   /** Highlights the selected gripper and names it in the status badge. */
   public setActiveGripper(id: GripperId) {
-    this.root.querySelectorAll<HTMLButtonElement>('.gripper-select-btn').forEach((btn) => {
+    this.root.querySelectorAll<HTMLButtonElement>('.gripper-select-btn[data-gripper]').forEach((btn) => {
       btn.classList.toggle('is-active', btn.dataset.gripper === id);
     });
     const text = this.gripperStatusBadge.querySelector('.gripper-text');

@@ -2,7 +2,7 @@
 
 Teach a grasp in the web CAD tool, then press **▶ Simulate in MuJoCo**. A MuJoCo window
 opens with the same STEP part on the table, shows your grasp as a green ghost gripper, and
-runs the pick & place with the CS66 + Robotiq 2F-85.
+runs the pick & place with the selected robot arm (Elite CS66 or EC66) and gripper (Robotiq 2F-85 or Hand-E).
 
 ## One-time setup
 
@@ -41,7 +41,23 @@ simulates it with that gripper.
 | Default TCP | 145 mm from the flange | 146.5 mm (fingertip at 156.5 mm incl. 11 mm coupler) |
 | Grip force (sim) | `grip_force_limit` | `grip_force_limit_hande_N` (default 60 N) |
 
-### Recording a motion (e.g. inside grip of a hollow part)
+### Choosing the robot arm
+
+The header has a **Robot: CS66 | EC66** selector (remembered between sessions). The arm does not change the
+taught grasp, which is relative to the part. It only decides which arm executes it when you press ▶. The
+simulator reports which arm it is building.
+
+| | Elite CS66 | Elite EC66 |
+|---|---|---|
+| MuJoCo model | `cs66/cs66.xml` | `ec66/ec66.xml`, from Elite's official URDF (`github.com/Elite-Robots/ROS`, `src/elite_description`) |
+| Kinematics | | d1 96, a2 418, a3 398, d4 122, d5 98, d6 89 mm (same as RoboDK's `Elite-Robots-EC66.robot`) |
+| Joint gains | `kp`/`kv` defaults in `robots.py` | 0.3 × the CS66 gains (the arm is ~3× lighter; the CS66 gains shake the part loose) |
+
+Arms are defined in `robots.py` (model file, flange body and pose, home posture, gains). To add another arm,
+add its MJCF there with the first 6 joints being the arm joints. RoboDK `.robot` files are a closed binary
+format and can't be loaded; use the manufacturer's URDF/STEP meshes instead.
+
+ (e.g. inside grip of a hollow part)
 
 A single saved pose is always approached in a straight line along the TCP axis, with the fingers fully
 open and closed to grip. For anything else, record the motion:
@@ -80,6 +96,9 @@ In the web app a **camera panel** opens in the 3D view when you press ▶. It sh
 during the run and the inspection images as thumbnails, each with the slip of the part in the
 gripper at that moment. Click a thumbnail for the full-size image.
 
+The MuJoCo window keeps its free, full-workspace view. A live inspection-camera feed appears as a small
+inset in the upper-left corner while the simulation runs.
+
 - Settings: `inspection` in `sim_config.json` (camera position, inspection point, field of view,
   views, turn speed). Views the arm can't reach are skipped and listed in the result.
 - Turning too fast makes the part slip in the 2F-85's weak simulated grip (about 6 mm per 90 deg turn at
@@ -94,8 +113,8 @@ settle → **preview** (green ghost = taught grasp with the fingers at the pre-g
 X red / Y green / Z blue, yellow dots = taught path) → **check** → start (single pose: `preGraspDistance`
 back along TCP −Z; recording: first recorded pose) → approach (straight line, or the recorded path) →
 grip (force-limited: close for outside, open for inside, stops on contact) → lift → inspection (camera on
-the table, several positions) → transfer → place in
-tray → release → retreat (taught path backwards) → home.
+the table, several positions) → transfer (part turned back upright in place, then carried in a straight
+line; timed so no joint exceeds ~0.5 rad/s) → place in tray → release → retreat (taught path backwards) → home.
 
 Before the robot moves, every waypoint is checked; on failure the ghost turns **red**, the reason is
 shown in the window and in the browser, and nothing is executed:
@@ -132,6 +151,8 @@ All transforms live in `frames.py`. Short version:
 | `ik.py` | Multi-seed DLS IK that reports its residual |
 | `taught_path.py` | Saved pose or recording → TCP path, finger widths, grip direction (inside/outside) |
 | `camera_feed.py` | Inspection camera rendering in a helper process (live `feed.jpg` + stills) |
+| `robots.py` | Robot arms (CS66, EC66): model file, flange mount, home posture, joint gains |
+| `ec66/` | Elite EC66 MJCF + meshes (from the official URDF, copied as `ec66_description.urdf`) |
 | `hande.py` | Robotiq Hand-E MuJoCo model (meshes converted once into `assets/hande/`) |
 | `finger_collision.py` | Finger meshes split into convex pieces (CAD scene only), see below |
 | `cad_pick_place.py` | The simulator (preview, checks, execution, status reporting) |
@@ -160,11 +181,12 @@ PY=~/miniforge3/envs/mujoco_cad/bin/python
 $PY step_to_mesh.py ../skf_cam_roller_305703_c-2z_0.stp --view
 
 # 2. Scene integration – part on the table (Jenga scene still: --object jenga)
-$PY build_robot.py --object cad_part
+$PY build_robot.py --object cad_part                  # add --robot ec66 for the EC66
 
 # 3+4. Grasp import + pick & place from an exported JSON (Saved Grasps → Export JSON)
 $PY cad_pick_place.py --step ../skf_cam_roller_305703_c-2z_0.stp --grasps ~/Downloads/grasps_skf_cam_roller_305703_c-2z_0_stp.json
 #   --grasp-name "Grasp Pose 1"   pick a grasp by name
 #   --headless --snapshots out/   no window, PNG per phase
+#   --robot ec66                  run it on the Elite EC66 (default: robotId in the request, else cs66)
 # A recorded grasp (with "trajectory") in the same JSON is replayed the same way.
 ```
