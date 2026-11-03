@@ -2,8 +2,6 @@ import { GRIPPERS, ROBOTS, type GripperId, type RobotId } from '../config';
 
 export interface LayoutCallbacks {
   onFileSelected: (file: File) => void;
-  onSampleSelected: (sampleName: string, sampleUrl: string) => void;
-  onUrlSelected: (url: string) => void;
   onLoadGripperClick: () => void;
   onGripperSelect: (id: GripperId) => void;
   onRobotSelect: (id: RobotId) => void;
@@ -11,8 +9,6 @@ export interface LayoutCallbacks {
   onTargetToggle?: (target: 'part' | 'gripper') => void;
   onSnapPointClick: () => void;
   onFlipApproachClick: () => void;
-  onTestGraspClick: () => void;
-  onStopTestClick: () => void;
 }
 
 export class AppLayout {
@@ -45,8 +41,6 @@ export class AppLayout {
   private btnTbRot!: HTMLButtonElement;
   private btnTbSnap!: HTMLButtonElement;
   private btnTbFlip!: HTMLButtonElement;
-  private btnTbTest!: HTMLButtonElement;
-  private btnTbStop!: HTMLButtonElement;
 
   constructor(root: HTMLElement, callbacks: LayoutCallbacks) {
     this.root = root;
@@ -116,75 +110,6 @@ export class AppLayout {
                       `<button class="gripper-select-btn robot-select-btn" data-robot="${r.id}" title="Simulate with the ${r.label} (${r.payloadKg} kg payload, ${r.reachMm} mm reach)">${r.label.replace('Elite ', '')}</button>`
                   )
                   .join('')}
-              </div>
-
-              <!-- Direct STEP File URL / Path Input -->
-              <div class="url-input-group">
-                <input type="text" id="cad-url-input" class="cad-url-input" placeholder="Or enter STEP file URL / path..." />
-                <button id="btn-load-url" class="btn btn-secondary btn-sm" title="Load STEP file from URL or path">
-                  <span>Load</span>
-                </button>
-              </div>
-
-              <!-- Quick Sample Models Dropdown -->
-              <div class="sample-dropdown">
-                <button id="btn-samples-menu" class="btn btn-outline" title="Load sample CAD files">
-                  <span>Samples</span>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="6 9 12 15 18 9"/>
-                  </svg>
-                </button>
-                <div class="dropdown-menu" id="samples-dropdown-menu">
-                  <button class="dropdown-item" data-url="/samples/skf_cam_roller_305703_c-2z_0.stp" data-name="skf_cam_roller_305703_c-2z_0.stp">
-                    <span class="file-icon">⚙️</span>
-                    <div class="item-text">
-                      <span class="item-title">SKF Cam Roller (STEP)</span>
-                      <span class="item-desc">skf_cam_roller_305703_c-2z_0.stp</span>
-                    </div>
-                  </button>
-                  <button class="dropdown-item" data-url="/samples/as1_pe_203.stp" data-name="as1_pe_203.stp">
-                    <span class="file-icon">📦</span>
-                    <div class="item-text">
-                      <span class="item-title">as1_pe_203.stp</span>
-                      <span class="item-desc">Assembly (18 Parts, STEP)</span>
-                    </div>
-                  </button>
-                  <button class="dropdown-item" data-url="/samples/as1-oc-214.stp" data-name="as1-oc-214.stp">
-                    <span class="file-icon">⚙️</span>
-                    <div class="item-text">
-                      <span class="item-title">as1-oc-214.stp</span>
-                      <span class="item-desc">AP214 Assembly (STEP)</span>
-                    </div>
-                  </button>
-                  <button class="dropdown-item" data-url="/samples/dm1-oc-214.stp" data-name="dm1-oc-214.stp">
-                    <span class="file-icon">🔩</span>
-                    <div class="item-text">
-                      <span class="item-title">dm1-oc-214.stp</span>
-                      <span class="item-desc">Machined Part (STEP)</span>
-                    </div>
-                  </button>
-                  <button class="dropdown-item" data-url="/samples/cube.stp" data-name="cube.stp">
-                    <span class="file-icon">🧊</span>
-                    <div class="item-text">
-                      <span class="item-title">cube.stp</span>
-                      <span class="item-desc">Simple Cube (STEP)</span>
-                    </div>
-                  </button>
-                  <button class="dropdown-item" data-url="/samples/cube.stl" data-name="cube.stl">
-                    <span class="file-icon">🔺</span>
-                    <div class="item-text">
-                      <span class="item-title">cube.stl</span>
-                      <span class="item-desc">Cube (STL Mesh)</span>
-                    </div>
-                  </button>
-                  <button class="dropdown-item" data-url="/samples/cube.obj" data-name="cube.obj">
-                    <span class="file-icon">📐</span>
-                    <div class="item-text">
-                      <span class="item-title">cube.obj</span>
-                      <span class="item-desc">Cube (OBJ Format)</span>
-                    </div>
-                  </button>
-                </div>
               </div>
 
               <!-- Loaded File Name Display -->
@@ -273,19 +198,7 @@ export class AppLayout {
 
               <div class="toolbar-divider"></div>
 
-              <button id="tb-btn-test" class="tb-btn tb-btn-primary" title="Run Cobot Pick & Place Sequence: Approach, Clamp on surface, Lift CAD model, Place and Release">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polygon points="5 3 19 12 5 21 5 3"/>
-                </svg>
-                <span>Pick & Place</span>
-              </button>
 
-              <button id="tb-btn-stop" class="tb-btn tb-btn-danger" title="Stop Test Sequence" disabled>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="6" y="6" width="12" height="12"/>
-                </svg>
-                <span>Stop</span>
-              </button>
             </div>
 
             <!-- Drag and Drop Overlay -->
@@ -371,8 +284,6 @@ export class AppLayout {
     this.btnTbRot = this.root.querySelector('#tb-btn-rot')!;
     this.btnTbSnap = this.root.querySelector('#tb-btn-snap')!;
     this.btnTbFlip = this.root.querySelector('#tb-btn-flip')!;
-    this.btnTbTest = this.root.querySelector('#tb-btn-test')!;
-    this.btnTbStop = this.root.querySelector('#tb-btn-stop')!;
   }
 
   private bindEvents() {
@@ -414,54 +325,6 @@ export class AppLayout {
       }
     });
 
-    // STEP File URL / Path Input
-    const urlInput = this.root.querySelector<HTMLInputElement>('#cad-url-input');
-    const loadUrlBtn = this.root.querySelector<HTMLButtonElement>('#btn-load-url');
-    const triggerUrlLoad = () => {
-      const url = urlInput?.value.trim();
-      if (url) {
-        this.callbacks.onUrlSelected(url);
-      }
-    };
-
-    if (loadUrlBtn) {
-      loadUrlBtn.addEventListener('click', triggerUrlLoad);
-    }
-    if (urlInput) {
-      urlInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          triggerUrlLoad();
-        }
-      });
-    }
-
-    // Sample Models Dropdown
-    const samplesBtn = this.root.querySelector('#btn-samples-menu');
-    const dropdownMenu = this.root.querySelector('#samples-dropdown-menu');
-    if (samplesBtn && dropdownMenu) {
-      samplesBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        dropdownMenu.classList.toggle('open');
-      });
-
-      document.addEventListener('click', () => {
-        dropdownMenu.classList.remove('open');
-      });
-
-      const sampleItems = dropdownMenu.querySelectorAll<HTMLButtonElement>('.dropdown-item');
-      sampleItems.forEach((item) => {
-        item.addEventListener('click', (e) => {
-          e.stopPropagation();
-          dropdownMenu.classList.remove('open');
-          const url = item.dataset.url;
-          const name = item.dataset.name;
-          if (url && name) {
-            this.callbacks.onSampleSelected(name, url);
-          }
-        });
-      });
-    }
-
     // Viewport Floating Toolbar Events
     // Edit Target Switcher (Gripper vs Part)
     this.btnTbEditGripper?.addEventListener('click', () => {
@@ -494,14 +357,6 @@ export class AppLayout {
 
     this.btnTbFlip.addEventListener('click', () => {
       this.callbacks.onFlipApproachClick();
-    });
-
-    this.btnTbTest.addEventListener('click', () => {
-      this.callbacks.onTestGraspClick();
-    });
-
-    this.btnTbStop.addEventListener('click', () => {
-      this.callbacks.onStopTestClick();
     });
 
     // Right Sidebar Tab Switcher
@@ -608,11 +463,6 @@ export class AppLayout {
 
   public setCanSnap(canSnap: boolean) {
     this.btnTbSnap.disabled = !canSnap;
-  }
-
-  public setTestGraspActive(testing: boolean) {
-    this.btnTbTest.disabled = testing;
-    this.btnTbStop.disabled = !testing;
   }
 
   public setGripperBadge(loaded: boolean) {

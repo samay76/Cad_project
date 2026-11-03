@@ -504,37 +504,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         layout.showError(err?.message || `Failed to read file ${file.name}`);
       }
     },
-    onSampleSelected: async (sampleName: string, sampleUrl: string) => {
-      if (!layout) return;
-      try {
-        layout.showLoading(true, `Loading sample ${sampleName}...`);
-        const response = await fetch(sampleUrl);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch ${sampleName}: HTTP ${response.status}`);
-        }
-        const buffer = await response.arrayBuffer();
-        await loadCADBuffer(buffer, sampleName);
-      } catch (err: any) {
-        layout.showLoading(false);
-        layout.showError(err?.message || `Failed to load sample ${sampleName}`);
-      }
-    },
-    onUrlSelected: async (url: string) => {
-      if (!layout) return;
-      try {
-        layout.showLoading(true, `Loading CAD model from ${url}...`);
-        const response = await fetch(url);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch file from "${url}" (HTTP ${response.status})`);
-        }
-        const buffer = await response.arrayBuffer();
-        const fileName = url.split('/').pop()?.split('?')[0] || 'model.step';
-        await loadCADBuffer(buffer, fileName);
-      } catch (err: any) {
-        layout.showLoading(false);
-        layout.showError(err?.message || `Failed to fetch file from "${url}". Verify the path or URL.`);
-      }
-    },
     onLoadGripperClick: async () => {
       await loadGripperModel();
     },
@@ -561,12 +530,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     onFlipApproachClick: () => {
       graspController?.flipApproach();
     },
-    onTestGraspClick: () => {
-      graspController?.testGrasp();
-    },
-    onStopTestClick: () => {
-      graspController?.stopTestGrasp();
-    }
   });
 
   layout.setActiveGripper(activeGripperId);
@@ -592,9 +555,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     },
     onToggleWireframe: () => {
       return viewer?.toggleWireframe() ?? false;
-    },
-    onViewPreset: (preset) => {
-      viewer?.setCameraView(preset);
     },
     onPartSelect: (index) => {
       viewer?.selectPartByIndex(index);
@@ -682,12 +642,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     },
     onResetPose: () => {
       graspController?.resetGripperPose();
-    },
-    onTestGrasp: () => {
-      graspController?.testGrasp();
-    },
-    onStopTest: () => {
-      graspController?.stopTestGrasp();
     },
     onSaveGrasp: () => {
       saveCurrentGrasp();
@@ -798,7 +752,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Hook state updates into UI
       graspController.setOnStateChange((state: GripperState) => {
         gripperPanel?.setGripperState(state);
-        layout?.setTestGraspActive(state.isTesting);
         layout?.setTransformMode(graspController?.getTransformMode() || 'translate');
       });
 
@@ -861,36 +814,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     layout?.showLoading(isLoading, message);
   });
 
-  // 10. Auto-load initial CAD model and Gripper
-  try {
-    const urlParams = new URLSearchParams(window.location.search);
-    const initialUrl =
-      urlParams.get('step') ||
-      urlParams.get('file') ||
-      urlParams.get('cad') ||
-      '/skf_cam_roller_305703_c-2z_0.stp';
-
-    const initialName = initialUrl.split('/').pop()?.split('?')[0] || 'model.step';
-
-    layout.showLoading(true, `Initializing OpenCascade WASM & loading ${initialName}...`);
-    const resp = await fetch(initialUrl);
-    if (resp.ok) {
-      const buffer = await resp.arrayBuffer();
-      await loadCADBuffer(buffer, initialName);
-    } else {
-      const fallbackUrl = '/samples/as1_pe_203.stp';
-      const fallbackResp = await fetch(fallbackUrl);
-      if (fallbackResp.ok) {
-        const buffer = await fallbackResp.arrayBuffer();
-        await loadCADBuffer(buffer, 'as1_pe_203.stp');
-      } else {
-        layout.showLoading(false);
-      }
-    }
-
-    // Auto-load gripper so it is immediately ready
-    await loadGripperModel();
-  } catch {
-    layout.showLoading(false);
-  }
+  // Load the gripper on startup, but wait for the user to choose a CAD file.
+  loadGripperModel().catch(() => {
+    // loadGripperModel reports failures through the UI.
+  });
 });

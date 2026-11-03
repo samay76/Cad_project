@@ -4,7 +4,6 @@ export interface ViewControlEvents {
   onResetView: () => void;
   onFitToModel: () => void;
   onToggleWireframe: () => boolean;
-  onViewPreset: (preset: 'iso' | 'top' | 'front' | 'right') => void;
   onPartSelect: (index: number) => void;
 }
 
@@ -66,15 +65,6 @@ export class PartsListView {
           </button>
         </div>
 
-        <div class="view-preset-group">
-          <div class="preset-label">Camera Angle</div>
-          <div class="segmented-control">
-            <button class="seg-btn" data-preset="iso" title="Isometric 3D">ISO</button>
-            <button class="seg-btn" data-preset="top" title="Top View (Z-axis)">TOP</button>
-            <button class="seg-btn" data-preset="front" title="Front View (-Y)">FRT</button>
-            <button class="seg-btn" data-preset="right" title="Right View (+X)">RGT</button>
-          </div>
-        </div>
 
         <button id="btn-wireframe" class="btn btn-secondary btn-toggle ${this.isWireframeActive ? 'active' : ''}">
           <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -169,16 +159,6 @@ export class PartsListView {
         this.setWireframeState(newState);
       });
     }
-
-    const segButtons = this.container.querySelectorAll<HTMLButtonElement>('.seg-btn');
-    segButtons.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const preset = btn.dataset.preset as 'iso' | 'top' | 'front' | 'right';
-        if (preset) {
-          this.events.onViewPreset(preset);
-        }
-      });
-    });
 
     const filterInput = this.container.querySelector<HTMLInputElement>('#parts-filter');
     if (filterInput) {

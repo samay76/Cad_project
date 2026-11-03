@@ -12,8 +12,6 @@ export interface GripperPanelEvents {
   onFlipApproach: () => void;
   onRotateApproach: (deg: number) => void;
   onResetPose: () => void;
-  onTestGrasp: () => void;
-  onStopTest: () => void;
   onSaveGrasp: () => void;
   onCloseUntilContact: (tolerance: number) => void;
   onOpenToClear: () => void;
@@ -137,32 +135,6 @@ export class GripperPanel {
                 <label title="Contact detection tolerance gap">Tolerance (mm)</label>
                 <input type="number" id="inp-tolerance" min="0.01" max="1.0" step="0.05" value="0.1" />
               </div>
-            </div>
-          </div>
-
-          <!-- 2. TEST GRASP MOTION & STATUS -->
-          <div class="property-section test-section">
-            <div class="section-title">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polygon points="5 3 19 12 5 21 5 3"/>
-              </svg>
-              <span>Test Grasp Motion</span>
-              <span id="test-phase-badge" class="test-phase-badge">Idle</span>
-            </div>
-
-            <div class="test-buttons-row">
-              <button id="btn-test-grasp" class="btn btn-primary btn-test" title="Run Pick & Place sequence: Pre-grasp, Approach with collision stop, Contact-aware Close, Lift CAD model, Place and Release">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polygon points="5 3 19 12 5 21 5 3"/>
-                </svg>
-                <span>Test Grasp & Lift</span>
-              </button>
-              <button id="btn-stop-test" class="btn btn-secondary btn-test" disabled>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="6" y="6" width="12" height="12"/>
-                </svg>
-                <span>Stop</span>
-              </button>
             </div>
           </div>
 
@@ -451,28 +423,6 @@ export class GripperPanel {
       }
     }
 
-    // Update test phase badge
-    const phaseBadge = this.container.querySelector('#test-phase-badge');
-    const testBtn = this.container.querySelector<HTMLButtonElement>('#btn-test-grasp');
-    const stopBtn = this.container.querySelector<HTMLButtonElement>('#btn-stop-test');
-    if (phaseBadge) {
-      const phaseLabels: Record<string, string> = {
-        idle: 'Idle',
-        'pre-grasp': 'Pre-Grasp (Open)',
-        approach: 'Approach (Detecting Collision)',
-        close: 'Contact-Aware Close',
-        lift: 'Lift (CAD Part Moving!)',
-        transfer: 'Transfer',
-        place: 'Place',
-        release: 'Release',
-        retract: 'Retract'
-      };
-      phaseBadge.textContent = phaseLabels[this.state.testPhase] || this.state.testPhase;
-      phaseBadge.classList.toggle('active', this.state.isTesting);
-    }
-    if (testBtn) testBtn.disabled = this.state.isTesting;
-    if (stopBtn) stopBtn.disabled = !this.state.isTesting;
-
     // Update Opening Slider
     const slider = this.container.querySelector<HTMLInputElement>('#slider-opening');
     const widthLabel = this.container.querySelector('#label-opening-width');
@@ -559,15 +509,6 @@ export class GripperPanel {
     inpTol?.addEventListener('change', (e) => {
       this.tolerance = parseFloat((e.target as HTMLInputElement).value) || 0.1;
       this.events.onToleranceChange(this.tolerance);
-    });
-
-    // Test Grasp
-    this.container.querySelector('#btn-test-grasp')?.addEventListener('click', () => {
-      this.events.onTestGrasp();
-    });
-
-    this.container.querySelector('#btn-stop-test')?.addEventListener('click', () => {
-      this.events.onStopTest();
     });
 
     // Alignment & Snapping

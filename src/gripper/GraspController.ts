@@ -209,6 +209,7 @@ export class GraspController {
   }
 
   public setCadPartsRoot(root: THREE.Group | null) {
+    const firstCadLoad = !this.cadPartsRoot && !!root;
     this.cadPartsRoot = root;
     if (this.partController) {
       this.partController.setCadPartsRoot(root);
@@ -222,6 +223,11 @@ export class GraspController {
       } else {
         this.setActiveEditTarget('gripper');
       }
+    }
+
+    if (firstCadLoad) {
+      this.resetGripperPose();
+      return;
     }
 
     this.evaluateCollisionState();
@@ -610,7 +616,7 @@ export class GraspController {
       this.gripperModel.root.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
     } else {
       this.gripperModel.root.position.set(0, 0, 100);
-      this.gripperModel.root.quaternion.set(0, 0, 0, 1);
+      this.gripperModel.root.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
     }
 
     this.gripperModel.setOpeningWidth(GRIPPER_CONFIG.defaultOpeningWidth);
