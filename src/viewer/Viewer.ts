@@ -422,6 +422,15 @@ export class Viewer {
     this.moveCameraTo(newPos, center, animate);
   }
 
+  /** Frames an arbitrary region (e.g. the planned motion over the table). */
+  public fitToBox(box: THREE.Box3, animate = true) {
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const distance = (Math.max(size.x, size.y, size.z) / 2) / Math.tan((this.camera.fov * Math.PI) / 360);
+    const dir = new THREE.Vector3(1.2, -1.5, 1.0).normalize();
+    this.moveCameraTo(center.clone().addScaledVector(dir, distance * 1.3), center, animate);
+  }
+
   /**
    * Resets the camera view to default orientation
    */

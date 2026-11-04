@@ -8,7 +8,6 @@ export interface GraspListEvents {
   onExportJSON: () => void;
   onImportJSON: (importedGrasps: SavedGrasp[]) => void;
   onSimulateGrasp: (grasp: SavedGrasp) => void;
-  onToggleRecord: () => void;
 }
 
 export class GraspListView {
@@ -17,8 +16,6 @@ export class GraspListView {
   private grasps: SavedGrasp[] = [];
   private selectedGraspId: string | null = null;
   private importFileInput!: HTMLInputElement;
-  private recording = false;
-  private recordedSamples = 0;
 
   constructor(container: HTMLElement, events: GraspListEvents) {
     this.container = container;
@@ -29,21 +26,6 @@ export class GraspListView {
   public setGrasps(grasps: SavedGrasp[]) {
     this.grasps = grasps;
     this.render();
-  }
-
-  /** Updates the Record button in place (no re-render, so it can be called while sampling). */
-  public setRecording(active: boolean, samples = 0) {
-    this.recording = active;
-    this.recordedSamples = samples;
-    const btn = this.container.querySelector<HTMLButtonElement>('#btn-record-motion');
-    if (!btn) return;
-    btn.classList.toggle('is-recording', active);
-    btn.title = active
-      ? 'Stop recording and save the motion as a grasp'
-      : 'Record how the gripper moves to the part (move it, open/close the fingers), then press again to save';
-    btn.querySelector('.rec-label')!.textContent = active
-      ? `Stop & save recording (${samples} ${samples === 1 ? 'pose' : 'poses'})`
-      : 'Record gripper motion';
   }
 
   public setSelectedGraspId(id: string | null) {
@@ -66,10 +48,6 @@ export class GraspListView {
         </div>
 
         <div class="grasps-footer-actions">
-          <button id="btn-record-motion" class="btn btn-secondary btn-sm btn-record ${this.recording ? 'is-recording' : ''}">
-            <span class="rec-dot" aria-hidden="true"></span>
-            <span class="rec-label">${this.recording ? `Stop &amp; save recording (${this.recordedSamples} ${this.recordedSamples === 1 ? 'pose' : 'poses'})` : 'Record gripper motion'}</span>
-          </button>
           <button id="btn-simulate-mujoco" class="btn btn-primary btn-sm btn-simulate" ${this.grasps.length === 0 ? 'disabled' : ''} title="Run the selected grasp as a pick &amp; place in MuJoCo">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none">
               <polygon points="6 4 20 12 6 20 6 4"/>
@@ -99,7 +77,6 @@ export class GraspListView {
 
     this.importFileInput = this.container.querySelector('#import-grasps-input')!;
     this.bindEvents();
-    this.setRecording(this.recording, this.recordedSamples);
   }
 
   private renderGraspsList(): string {
@@ -227,11 +204,6 @@ export class GraspListView {
         this.setSelectedGraspId(grasp.id);
         this.events.onSimulateGrasp(grasp);
       }
-    });
-
-    // Record gripper motion
-    this.container.querySelector('#btn-record-motion')?.addEventListener('click', () => {
-      this.events.onToggleRecord();
     });
 
     // Export JSON

@@ -1,8 +1,9 @@
-# Simulating a taught CAD grasp in MuJoCo
+# CAD pick & place in MuJoCo
 
-Teach a grasp in the web CAD tool, then press **▶ Simulate in MuJoCo**. A MuJoCo window
-opens with the same STEP part on the table, shows your grasp as a green ghost gripper, and
-runs the pick & place with the selected robot arm (Elite CS66 or EC66) and gripper (Robotiq 2F-85 or Hand-E).
+Two ways to pick a STEP part with the selected robot arm (Elite CS66 or EC66) and gripper (Robotiq 2F-85 or Hand-E):
+
+- **Automatic** (the main workflow): click a point on the part, and the grasp and motion are calculated.
+- **Taught**: place the gripper yourself, save the grasp, and press **▶ Simulate in MuJoCo**.
 
 ## One-time setup
 
@@ -16,11 +17,84 @@ conda create -n mujoco_cad -c conda-forge python=3.11
 
 The web bridge uses `~/miniforge3/envs/mujoco_cad/bin/python`; override with `MUJOCO_PYTHON=/path/to/python npm run dev`.
 
-## Workflow
+## Automatic pick & place
 
 ```bash
 conda activate cadweb && cd ~/Cad_project && npm run dev     # http://localhost:3000
 ```
+
+In the **Auto Pick & Place** panel (left sidebar):
+
+1. **Load CAD**: choose a `.step` / `.stp` file.
+2. Click the part where one finger should go, then where the other should go. Numbered markers show the points. A
+   third click starts over; **Clear Points** removes them.
+   When both are marked, a see-through shape appears between them, showing the direction the fingers move (arrows).
+   It's red if the grip can't work, and the panel says why.
+3. **Plan to Points**: up to three complete solutions are listed, best first. Click one to show it: the gripper
+   moves to the points, and the table, tray and planned TCP path are drawn (blue = free space, green = near the
+   part, orange = carrying, purple = showing it to the camera).
+4. Preview before running anything:
+   - **Preview Here** plays the gripper and part in the viewport.
+   - **Preview Robot** plays the planned motion with the arm in a MuJoCo window, without physics.
+5. **Execute Pick & Place** runs it with full physics, with the live camera feed and inspection images in a panel in the
+   viewport, and reports how close each finger came to its point.
+
+Nothing is recorded or replayed: the motion is calculated from the marked points each time.
+
+### What the two points mean
+
+The surfaces at the points decide the grip:
+
+- **Facing away from each other** (two outer sides): outside grip. The fingers close on the points.
+- **Facing each other** (two sides of a bore or slot): inside grip. The fingers enter closed and open against the points.
+- **Same direction, or more than 53 deg from facing directly opposite**: refused, because the fingers would slide off.
+
+The points don't have to line up. The fingers close along the direction the two surfaces face, and both points just have to land
+on the pads (about 21 mm wide). On a curved wall a flat pad touches at its edges first, so the fingers can stop a few mm short of a point.
+
+The gripper goes exactly where you marked or nowhere: if the points can't be reached, the app says why and does not grip
+somewhere else. One point on the inner wall and one on the outer wall is allowed, since you chose it, and the app points it out.
+
+The points can land anywhere on the gripping face, so the gripper can sit higher or lower to clear the table or fit a bore.
+Inside a bore the 2F-85 presses with the metal behind the pad, so the reported distance there is about 3 mm rather than ~0.
+
+### Single-point search (command line only)
+
+Surface points are sampled, mostly near the click, and a ray from each finds the opposite surface. Pairs whose
+normals oppose each other inside the friction cone and that fit the gripper become candidates. Rays into the
+material give an outside grip, and rays across free space give an inside grip.
+Each pair is tried with approach directions around the closing axis, from straight down to 65 deg off vertical
+(up to level for an inside grip), with the
+gripping face on the contacts, measured from the gripper model at that opening (`gripper_geometry.py`).
+
+`auto_pick_place.py --click ... --normal ...` searches for a grasp near one point. The app no longer uses this. The score weighs distance to the click, how well the surfaces oppose, distance to the centre of mass, how much of
+the pad touches, and how vertical the approach is. Inside grips rank below outside grips. If nothing works near
+the click, the whole part is searched and the app says so.
+
+### How a candidate is checked (`auto_pick_place.py`)
+
+Best first, until three complete motions are found. This applies to grasps from marked points too. A candidate is dropped at the first thing that fails: reach (IK),
+the straight approach, the fingers at the grip (only the pads may touch), the straight lift, the target
+(tried at several yaws), opening the fingers there, the retreat, and the free-space moves.
+
+Sequence: home → pre-grasp → grasp → close → lift → inspection → transfer → place → open → retreat → home. Free-space moves and the transfer use
+RRT-Connect when a direct joint move would collide (`motion_planner.py`). Collisions are checked against
+the same shapes the physics uses, with the carried part attached to the gripper (`collision_check.py`).
+
+### Limits
+
+- The whole STEP file is one rigid object: the click guides the grasp, but one solid of an assembly can't be picked alone.
+- The target is `place_xy` in `sim_config.json`. The part must fit the tray (inner 124 x 94 mm) and is placed in the orientation it was
+  grasped, turned about the vertical if needed.
+- The part is released onto the table and settles first. If that tips it, the plan uses the settled pose and the viewport says so.
+- Inspection views are set in `inspection` in `sim_config.json` (`"enabled": false` turns the stage off). A view the arm can't reach is
+  skipped and listed in the result; it doesn't rule out a grasp. A tilted view can shake loose a weak grip, which is reported as a failure.
+- The viewport's red collision badge uses bounding boxes for the 2F-85 linkage and can flag grips that are clear. The simulator's
+  check is the accurate one.
+
+Optional planner settings go in `auto_grasp` in `sim_config.json` (fields of `GraspParams`, e.g. `"max_tilt_deg": 45`).
+
+## Taught grasps
 
 1. Load the STEP part, then **Load Gripper**.
 2. Place the gripper (Snap to point / Auto-place / gizmo), close until contact, **Save Grasp Pose**.
@@ -57,30 +131,9 @@ Arms are defined in `robots.py` (model file, flange body and pose, home posture,
 add its MJCF there with the first 6 joints being the arm joints. RoboDK `.robot` files are a closed binary
 format and can't be loaded; use the manufacturer's URDF/STEP meshes instead.
 
- (e.g. inside grip of a hollow part)
-
-A single saved pose is always approached in a straight line along the TCP axis, with the fingers fully
-open and closed to grip. For anything else, record the motion:
-
-1. In **Saved Grasps** press **Record gripper motion** (button turns red).
-2. Move the gripper the way the robot should go: gizmo, step buttons, finger opening slider. For a hollow
-   cylinder, close the fingers, move above the bore, go down into it, then **open** the fingers
-   until they press against the inner wall.
-3. Press **Stop & save recording**. The grasp is saved as `Recorded Grasp N` with a `REC · inside` /
-   `REC · outside` badge.
-4. Press ▶. MuJoCo starts at the first recorded pose, replays the path relative to the part with the
-   recorded finger widths, grips, carries the part to the tray, releases (fingers back to the width they
-   had before gripping) and leaves along the recorded path in reverse.
-
-Inside grip of `circle_Cad.step` (bore Ø35.7 mm, 39 mm high), tested through the UI:
-Flip Approach (180°) so the fingers point down → Close (0mm) → Record → step 5 mm, Z − until the
-gripper position relative to the part reads Z ≈ 30 mm → move the opening slider up (e.g. to 40 mm) →
-Stop & save → ▶. Z = 25 mm is too deep: the thick part of the finger hits the rim, and the sim says how many mm
-higher to stop. The web contact badge shows "contact" inside the hole because it uses box shapes;
-ignore it there.
-
-Grip direction: what the fingers do at the end of the recording, after the gripper has stopped moving.
-Opening = inside grip, closing = outside grip. If they don't move, the app asks.
+A saved pose is always approached in a straight line along the TCP axis, with the fingers fully open and closed
+to grip. Grasps with a recorded motion, saved or imported from earlier versions, still replay as recorded (`REC` badge),
+but new motions can no longer be recorded: use the automatic workflow instead.
 
 The part lies on the table in the **same orientation it has in the web viewer**, then settles under
 gravity; the grasp is applied relative to the part's settled pose.
@@ -149,6 +202,12 @@ All transforms live in `frames.py`. Short version:
 | `cad_part.py` | Adds the part to the scene (visual mesh display-only, hulls for contact, friction/priority for the pads) |
 | `frames.py` | All frame transforms (documented) |
 | `ik.py` | Multi-seed DLS IK that reports its residual |
+| `auto_pick_place.py` | Automatic workflow: plan, preview and execute modes (reuses `CadPickPlace` for the scene and stepping) |
+| `grasp_planner.py` | Grasp candidates from the part geometry (no robot involved) |
+| `gripper_geometry.py` | Where the gripping faces are at each opening, measured from the gripper model |
+| `collision_check.py` | Is an arm posture collision-free (part on the table, or carried) |
+| `motion_planner.py` | Straight TCP lines and RRT-Connect through free space |
+| `test_auto_pick_place.py` | Acceptance test: plans and executes with physics, no window |
 | `taught_path.py` | Saved pose or recording → TCP path, finger widths, grip direction (inside/outside) |
 | `camera_feed.py` | Inspection camera rendering in a helper process (live `feed.jpg` + stills) |
 | `robots.py` | Robot arms (CS66, EC66): model file, flange mount, home posture, joint gains |
@@ -158,7 +217,7 @@ All transforms live in `frames.py`. Short version:
 | `cad_pick_place.py` | The simulator (preview, checks, execution, status reporting) |
 | `sim_config.json` | Pick/place positions, lift height, density, grip force, speeds |
 | `build_robot.py` | `build(obj='jenga' \| 'cad_part', ...)` – Jenga stays the default |
-| `../vite-plugins/mujocoBridge.ts` | Dev-server endpoints `/api/mujoco/simulate` and `/api/mujoco/status` |
+| `../vite-plugins/mujocoBridge.ts` | Dev-server endpoints `/api/mujoco/simulate`, `/api/mujoco/auto/*` and `/api/mujoco/status` |
 
 **Finger collision shapes.** MuJoCo collides each mesh as its convex hull, which made the closed
 fingertips ~38 mm wide instead of ~16 mm (the hull fills in the thin tip). In the CAD scene the finger
@@ -189,4 +248,12 @@ $PY cad_pick_place.py --step ../skf_cam_roller_305703_c-2z_0.stp --grasps ~/Down
 #   --headless --snapshots out/   no window, PNG per phase
 #   --robot ec66                  run it on the Elite EC66 (default: robotId in the request, else cs66)
 # A recorded grasp (with "trajectory") in the same JSON is replayed the same way.
+
+# Automatic pick & place, without the web app (each point is x,y,z,nx,ny,nz in the part frame, mm)
+$PY auto_pick_place.py --step part.step --point1=0,0,10,0,-1,0 --point2=0,30,10,0,1,0 --mode plan --plan plan.json
+$PY auto_pick_place.py --step part.step --plan plan.json --mode preview
+$PY auto_pick_place.py --step part.step --plan plan.json --mode execute     # add --headless for no window
+
+# Acceptance test of the automatic workflow (a few minutes, no window)
+$PY test_auto_pick_place.py
 ```

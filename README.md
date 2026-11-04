@@ -7,6 +7,10 @@ A high-performance browser-based CAD viewer and robotic pick-point tool with ful
 
 ![Cobot Pick-Point Gripper Step 2 Screenshot](/home/human/cad-step2-verified.png)
 
+## Automatic Pick & Place
+
+Load a STEP file, click the two points where the fingers should go, and press **Plan to Points**: a collision-free robot motion to those points is computed, previewed, and executed in MuJoCo. See [jenga_mujoco/CAD_SIM.md](jenga_mujoco/CAD_SIM.md).
+
 ## Tech Stack
 - **Vite 6** + **TypeScript** (Vanilla TypeScript, no unnecessary framework overhead)
 - **Three.js** (WebGL 3D rendering with OrbitControls and TransformControls)

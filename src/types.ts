@@ -63,6 +63,8 @@ export interface ClickedPointInfo {
   // Associated part details
   partIndex: number;
   partName: string;
+  // True for a click on the surface; false when a part was selected in the parts list (its centre)
+  fromSurfaceClick?: boolean;
 }
 
 export interface SelectionState {

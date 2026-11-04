@@ -806,6 +806,31 @@ export class GraspController {
     this.animationId = requestAnimationFrame(animateStep);
   }
 
+  /** Hands the gripper and part to a playback (AutoPickPreview). stopTestGrasp() restores both. */
+  public beginExternalMotion() {
+    if (this.isTesting) this.stopTestGrasp();
+    this.isTesting = true;
+    this.transformControls.enabled = false;
+    this.transformControls.getHelper().visible = false;
+    this.gripperModel.highlightMeshes([]);
+    this.savedPoseBeforeTest = {
+      position: this.gripperModel.root.position.clone(),
+      quaternion: this.gripperModel.root.quaternion.clone(),
+      openingWidth: this.gripperModel.getOpeningWidth()
+    };
+    if (this.cadPartsRoot) {
+      this.savedCadPosBeforeTest = this.cadPartsRoot.position.clone();
+      this.savedCadQuatBeforeTest = this.cadPartsRoot.quaternion.clone();
+    }
+  }
+
+  public applyExternalMotion(position: THREE.Vector3, quaternion: THREE.Quaternion, widthMm: number) {
+    this.gripperModel.root.position.copy(position);
+    this.gripperModel.root.quaternion.copy(quaternion);
+    this.gripperModel.setOpeningWidth(widthMm);
+    this.gripperModel.root.updateMatrixWorld(true);
+  }
+
   public stopTestGrasp() {
     if (this.animationId !== null) {
       cancelAnimationFrame(this.animationId);

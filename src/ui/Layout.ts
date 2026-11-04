@@ -17,6 +17,7 @@ export class AppLayout {
 
   // DOM Container references
   public topBarContainer!: HTMLElement;
+  public autoPickContainer!: HTMLElement;
   public partsListContainer!: HTMLElement;
   public graspListContainer!: HTMLElement;
   public viewportContainer!: HTMLElement;
@@ -141,6 +142,7 @@ export class AppLayout {
         <main class="app-workspace">
           <!-- LEFT SIDEBAR (~260px) -->
           <aside class="sidebar-left" id="left-sidebar-container">
+            <div id="auto-pick-mount"></div>
             <div id="parts-list-mount"></div>
             <div id="grasps-list-mount"></div>
           </aside>
@@ -261,6 +263,7 @@ export class AppLayout {
     `;
 
     this.topBarContainer = this.root.querySelector('#top-bar-container')!;
+    this.autoPickContainer = this.root.querySelector('#auto-pick-mount')!;
     this.partsListContainer = this.root.querySelector('#parts-list-mount')!;
     this.graspListContainer = this.root.querySelector('#grasps-list-mount')!;
     this.viewportContainer = this.root.querySelector('#viewport-container')!;

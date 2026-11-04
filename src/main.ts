@@ -7,10 +7,13 @@ import { GripperPanel } from './ui/GripperPanel';
 import { PartPanel } from './ui/PartPanel';
 import { GraspListView } from './ui/GraspList';
 import { CameraFeedPanel } from './ui/CameraFeedPanel';
+import { AutoPickPanel } from './ui/AutoPickPanel';
 import { GripperLoader } from './gripper/GripperLoader';
 import { GraspController } from './gripper/GraspController';
 import { PartController } from './part/PartController';
-import type { SavedGrasp, ClickedPointInfo, GripperState, TrajectorySample, GripMode, Pose } from './types';
+import { AutoPickController } from './autopick/AutoPickController';
+import { arrayBufferToBase64 } from './autopick/api';
+import type { SavedGrasp, ClickedPointInfo, GripperState } from './types';
 import {
   GRIPPERS,
   ROBOTS,
@@ -37,6 +40,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let graspController: GraspController | null = null;
   let partController: PartController | null = null;
   let cameraPanel: CameraFeedPanel | null = null;
+  let autoPick: AutoPickController | null = null;
 
   // State
   let lastClickedPoint: ClickedPointInfo | null = null;
@@ -81,6 +85,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     layout.setLoadedFileName(fileName);
     await viewer.loadFile(buffer, fileName);
     currentModelBuffer = buffer.slice(0);
+    autoPick?.clearPoints();
 
     const modelRoot = viewer.getModelRoot();
     if (partController) {
@@ -140,151 +145,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     graspList?.setSelectedGraspId(newGrasp.id);
   };
 
-  // ---- Motion recording: the gripper path relative to the part, replayed by the MuJoCo simulation ----
-  const RECORD_INTERVAL_MS = 50;
-  const RECORD_MAX_SAMPLES = 3000;
-  let recordTimer: number | null = null;
-  let recordStart = 0;
-  let recordSamples: TrajectorySample[] = [];
-
-  const poseQuat = (p: Pose) =>
-    new THREE.Quaternion(p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w);
-  const poseDistMm = (a: Pose, b: Pose) =>
-    Math.hypot(a.position.x - b.position.x, a.position.y - b.position.y, a.position.z - b.position.z);
-  const poseAngleDeg = (a: Pose, b: Pose) => THREE.MathUtils.radToDeg(poseQuat(a).angleTo(poseQuat(b)));
-
-  const recordSample = () => {
-    if (!graspController) return;
-    const st = graspController.getCurrentState();
-    const pose: Pose = {
-      position: { ...st.relativePose.position },
-      orientation: { ...st.relativePose.orientation }
-    };
-    const last = recordSamples[recordSamples.length - 1];
-    if (
-      last &&
-      poseDistMm(last.pose, pose) < 0.2 &&
-      poseAngleDeg(last.pose, pose) < 0.2 &&
-      Math.abs(last.width - st.openingWidth) < 0.1
-    ) {
-      return; // nothing moved
-    }
-    recordSamples.push({ t: Date.now() - recordStart, pose, width: st.openingWidth });
-    graspList?.setRecording(true, recordSamples.length);
-    if (recordSamples.length >= RECORD_MAX_SAMPLES) {
-      layout?.showInfo('Recording', `Reached ${RECORD_MAX_SAMPLES} poses; recording stopped and saved.`);
-      stopRecording();
-    }
-  };
-
-  const startRecording = () => {
-    if (!graspController) {
-      layout?.showError('Load the gripper before recording a motion.', 'Recording');
-      return;
-    }
-    if (!viewer?.getModelRoot()) {
-      layout?.showError('Load the CAD part before recording a motion.', 'Recording');
-      return;
-    }
-    // The robot comes from above: an approach axis (TCP +Z) pointing up means the gripper is upside down.
-    const q = graspController.getCurrentState().pose.orientation;
-    const approach = new THREE.Vector3(0, 0, 1).applyQuaternion(new THREE.Quaternion(q.x, q.y, q.z, q.w));
-    if (approach.z > 0.3) {
-      layout?.showError(
-        'The gripper points UP (it comes from below the part). Press "Flip Approach (180°)" first so the ' +
-          'fingers point down at the part, then press Record again.',
-        'Recording'
-      );
-      return;
-    }
-    recordSamples = [];
-    recordStart = Date.now();
-    recordSample(); // starting pose
-    recordTimer = window.setInterval(recordSample, RECORD_INTERVAL_MS);
-    graspList?.setRecording(true, recordSamples.length);
-    layout?.showInfo(
-      'Recording gripper motion',
-      'Move the gripper to the part the way the robot should (gizmo or step buttons), set the finger ' +
-        'opening on the way, and finish at the grasp pose. Last, close the fingers on the part (outside ' +
-        'grip) or open them against the inner wall (inside grip). Then press "Stop & save recording".\n\n' +
-        'Inside grip of a hole: close the fingers (Close 0mm) BEFORE going down, go down only with the ' +
-        'fingertip in the hole (the finger is thick ~8 mm above the TCP), then open the fingers. ' +
-        'Inside a hole the web contact/collision badge is approximate (box shapes); MuJoCo checks the exact shape.'
-    );
-  };
-
-  /** Grip direction = how the fingers move after the gripper stops at the grasp pose. */
-  const detectGripMode = (samples: TrajectorySample[]): GripMode | null => {
-    const final = samples[samples.length - 1];
-    let k = samples.length - 1;
-    // The pose can drift slightly while the user adjusts the fingers at the grasp.
-    // Keep those near-identical samples in the final segment, otherwise a small
-    // TCP wiggle can hide the width change and trigger the fallback prompt.
-    while (k > 0 && poseDistMm(samples[k - 1].pose, final.pose) < 2 && poseAngleDeg(samples[k - 1].pose, final.pose) < 2) {
-      k--;
-    }
-    const preWidth = samples[k].width;
-    // The opening slider moves in 0.5 mm steps; detect a real slider step.
-    if (final.width > preWidth + 0.25) return 'inside';
-    if (final.width < preWidth - 0.25) return 'outside';
-    return null;
-  };
-
-  const stopRecording = () => {
-    if (recordTimer !== null) window.clearInterval(recordTimer);
-    recordTimer = null;
-    recordSample(); // final pose
-    graspList?.setRecording(false);
-    const samples = recordSamples;
-    recordSamples = [];
-    if (samples.length < 2) {
-      layout?.showError('Nothing was recorded: move the gripper while recording.', 'Recording');
-      return;
-    }
-    let gripMode = detectGripMode(samples);
-    if (!gripMode) {
-      gripMode = confirm(
-        'The recording ends without opening or closing the fingers at the grasp pose.\n\n' +
-          'OK = grip by CLOSING the fingers onto the part (outside grip)\n' +
-          'Cancel = grip by OPENING the fingers against an inner wall (inside grip)'
-      )
-        ? 'outside'
-        : 'inside';
-    }
-    const state = graspController!.getCurrentState();
-    const last = samples[samples.length - 1];
-    const count = savedGrasps.length + 1;
-    const newGrasp: SavedGrasp = {
-      id: `grasp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      name: `Recorded Grasp ${count}`,
-      tcpPose: last.pose,
-      rpy: state.relativeRpy,
-      openingWidth: last.width,
-      contactPoints: graspController!.getContactPointsPart(),
-      standoff: state.standoff,
-      depth: state.depth,
-      approachAxis: { x: 0, y: 0, z: 1 },
-      closingAxis: { x: 1, y: 0, z: 0 },
-      preGraspDistance: state.preGraspDistance,
-      tcpOffset: state.tcpOffset,
-      createdAt: Date.now(),
-      partName: currentModelName,
-      trajectory: samples,
-      gripMode,
-      gripperId: activeGripperId
-    };
-    savedGrasps.push(newGrasp);
-    saveGraspsToStorage();
-    graspList?.setGrasps(savedGrasps);
-    graspList?.setSelectedGraspId(newGrasp.id);
-    layout?.showInfo(
-      'Recording saved',
-      `"${newGrasp.name}": ${samples.length} poses, ${gripMode === 'inside' ? 'inside grip (fingers open to grip)' : 'outside grip (fingers close to grip)'}. ` +
-        'Press ▶ to replay it in MuJoCo.',
-      6000
-    );
-  };
-
   // Helper to restore grasp (places gripper at T_world_part * T_part_grasp)
   const restoreGrasp = async (grasp: SavedGrasp) => {
     if (!graspController) {
@@ -310,14 +170,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   let switchingGripper = false;
   const selectGripper = async (id: GripperId) => {
     if (id === activeGripperId || switchingGripper) return;
-    if (recordTimer !== null) {
-      layout?.showError('Stop the recording before switching the gripper.', 'Gripper');
-      return;
-    }
     const spec = GRIPPERS[id];
     if (!graspController) {
       activeGripperId = id;
       applyGripperSpec(spec);
+      autoPick?.invalidate();
       layout?.setActiveGripper(id);
       gripperPanel?.setMaxOpening(spec.maxOpeningWidth);
       return;
@@ -328,6 +185,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const model = await GripperLoader.loadGripper(spec);
       activeGripperId = id;
       applyGripperSpec(spec);
+      autoPick?.invalidate();
       graspController.replaceGripperModel(model);
       layout?.setActiveGripper(id);
       gripperPanel?.setMaxOpening(spec.maxOpeningWidth);
@@ -365,15 +223,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
 
   // ---- MuJoCo simulation bridge (served by the Vite plugin in vite.config.ts) ----
-  const arrayBufferToBase64 = (buf: ArrayBuffer): string => {
-    const bytes = new Uint8Array(buf);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += 0x8000) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-    }
-    return btoa(binary);
-  };
-
   let simPollTimer: number | null = null;
 
   const pollSimulation = (runId: string) => {
@@ -513,8 +362,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     onRobotSelect: (id) => {
       activeRobotId = id;
       storeRobotId(id);
+      autoPick?.invalidate();
       layout?.setActiveRobot(id);
-      layout?.showInfo('Robot arm', `${ROBOTS[id].label} selected: ▶ Simulate in MuJoCo runs the pick & place with it.`);
+      layout?.showInfo('Robot arm', `${ROBOTS[id].label} selected: the pick & place in MuJoCo uses it.`);
     },
     onTransformModeToggle: (mode) => {
       graspController?.setTransformMode(mode);
@@ -601,6 +451,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   partController.setOnStateChange((state) => {
     partPanel?.setPartState(state);
+    autoPick?.partMoved();
     viewer?.requestRender();
   });
 
@@ -698,15 +549,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       importGraspsJSON(imported);
     },
     onSimulateGrasp: (grasp) => {
-      if (recordTimer !== null) {
-        layout?.showError('Stop the recording first.', 'MuJoCo simulation');
-        return;
-      }
       simulateGraspInMujoco(grasp);
-    },
-    onToggleRecord: () => {
-      if (recordTimer !== null) stopRecording();
-      else startRecording();
     }
   });
   graspList.setGrasps(savedGrasps);
@@ -770,8 +613,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
 
+  // Automatic pick & place: two marked points -> grasp -> planned motion -> preview -> execute
+  autoPick = new AutoPickController(new AutoPickPanel(layout.autoPickContainer), {
+    viewer,
+    getGraspController: () => graspController,
+    getPart: () => ({ name: currentModelName, buffer: currentModelBuffer }),
+    getGripperId: () => activeGripperId,
+    getRobotId: () => activeRobotId,
+    getCameraPanel: () => cameraPanel,
+    restoreGrasp,
+    showError: (message, title) => layout?.showError(message, title)
+  });
+
   // 9. Connect Viewer events to UI
   viewer.setOnModelLoaded((metadata, parts) => {
+    // The new model starts with nothing selected; a point on the previous part means nothing here.
+    lastClickedPoint = null;
+    layout?.setCanSnap(false);
+    gripperPanel?.setCanSnap(false);
     layout?.setLoadedFileName(metadata.fileName);
     partsList?.setParts(parts);
     propertiesPanel?.setModelMetadata(metadata);
@@ -797,6 +656,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (state.clickedPoint) {
       lastClickedPoint = state.clickedPoint;
+      autoPick?.markPoint(state.clickedPoint);
       layout?.setCanSnap(true);
       gripperPanel?.setCanSnap(true);
     } else {

@@ -225,7 +225,8 @@ export class SelectionManager {
         z: Number(worldNormal.z.toFixed(3))
       },
       partIndex: userData.partIndex ?? 0,
-      partName: userData.partName ?? mesh.name ?? 'Part'
+      partName: userData.partName ?? mesh.name ?? 'Part',
+      fromSurfaceClick: true
     };
 
     // Position pick marker in 3D scene
