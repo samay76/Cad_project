@@ -117,12 +117,16 @@ try {
         const cell = window.__viewer.getScene().getObjectByName('live_cell');
         return cell.children.filter((c) => c.type === 'Group').map((g) => g.position.toArray().map((v) => v.toFixed(4)).join()).join('|');
       });
+    // Sim first settles the part and holds still for the preview (a few seconds): wait for the arm to move
     const p0 = await pose();
-    await page.waitForTimeout(4000);
+    try {
+      await waitFor(async () => (await pose()) !== p0, 30000, 'movement');
+      console.log(`ok (${what}): live cell shown and moving`);
+    } catch {
+      fail(`${what}: the live cell did not move in 30 s`);
+    }
+    await page.waitForTimeout(3000);
     if (shots) await page.screenshot({ path: path.join(shots, `${what}_live.png`) });
-    const p1 = await pose();
-    if (p0 === p1) fail(`${what}: the live cell did not move in 4 s`);
-    else console.log(`ok (${what}): live cell shown and moving`);
     await waitFor(
       async () => (await page.getAttribute('#auto-pick-status', 'class'))?.match(/is-ok|is-error/) &&
         !(await page.isVisible('.live-view-overlay.is-live')),
