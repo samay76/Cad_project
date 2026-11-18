@@ -548,7 +548,13 @@ def run_on_real_robot(sim, doc, plan, ip, src=None, speed=REAL_SPEED_DEFAULT, go
             reply = robot.move_joints(target, speed)
             if reply is False:
                 raise PlanError(f"The controller refused the move to '{w['phase']}' (moveByJoint returned False).")
-            _wait_arrival(robot, target, mirror, w['phase'])
+            reached = _wait_arrival(robot, target, mirror, w['phase'])
+            # sim-to-real record: where each move was sent and where the robot really stopped
+            stops = st.info.setdefault('real_stops', [])
+            stops.append({'phase': w['phase'], 'target_deg': [round(float(v), 3) for v in target],
+                          'actual_deg': [round(float(v), 3) for v in reached],
+                          'max_err_deg': round(float(np.max(np.abs(reached - target))), 3),
+                          't_s': round(time.time() - t_begin, 2)})
         st.info['real_seconds'] = round(time.time() - t_begin, 1)
         moving = False
         if go_home:
@@ -598,7 +604,7 @@ def _grip(gripper, pos, speed, force, robot, mirror, name, timeout=8.0):
 
 
 def _wait_arrival(robot, target, mirror, name):
-    """Same wait as ec66_sim.py: until the move has started, then until it has stopped at the target."""
+    """Waits until the move has started, then until it has stopped at the target. Returns the joints reached."""
     t_start, started, last, still_since = time.time(), False, None, None
     while True:
         tick = time.time()
@@ -622,6 +628,8 @@ def _wait_arrival(robot, target, mirror, name):
             still_since = None
         last = now
         time.sleep(max(0.0, 1.0 / POLL_HZ - (time.time() - tick)))
-    err = float(np.max(np.abs(np.array(robot.joints()) - target)))
+    reached = np.array(robot.joints())
+    err = float(np.max(np.abs(reached - target)))
     if err > ARRIVE_TOLERANCE_DEG:
         raise PlanError(f"The robot stopped {err:.1f} deg away from '{name}'; not continuing.")
+    return reached

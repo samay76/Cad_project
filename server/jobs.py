@@ -19,8 +19,8 @@ _PART_EXT = {'.step', '.stp', '.stl', '.obj'}
 
 
 class JobRunner:
-    def __init__(self, settings, repo):
-        self.s, self.repo = settings, repo
+    def __init__(self, settings, repo, module='cell.auto_pick_place'):
+        self.s, self.repo, self.module = settings, repo, module
         self._lock = threading.Lock()
         self._proc = None
         self._run_id = None
@@ -62,16 +62,17 @@ class JobRunner:
         return self._run_id
 
     def launch(self, run_id, args):
-        """Starts `python -m cell.auto_pick_place <args> --status <run>/status.json`; stops a running job first."""
+        """Starts `python -m <module> <args> --status <run>/status.json`; stops a running job first."""
         run_dir = self.run_dir(run_id)
         status_path = os.path.join(run_dir, 'status.json')
         with self._lock:
             self._stop_locked(wait=True)
             _write_json(status_path, {'state': 'running', 'phase': 'starting', 'message': 'Starting...'})
             log = open(os.path.join(run_dir, 'log.txt'), 'ab')
-            env = dict(os.environ, DISPLAY=self.s.display, PYTHONUNBUFFERED='1',
+            # PYTHONPATH = the repo only: a ROS (or other) PYTHONPATH from the shell must not leak into the job
+            env = dict(os.environ, DISPLAY=self.s.display, PYTHONUNBUFFERED='1', PYTHONPATH=self.repo,
                        CELL_CONFIG=self.s.config_file, CELL_DATA_DIR=self.s.data_dir)
-            proc = subprocess.Popen([self.s.python, '-m', 'cell.auto_pick_place', *args, '--status', status_path],
+            proc = subprocess.Popen([self.s.python, '-m', self.module, *args, '--status', status_path],
                                     cwd=self.repo, env=env, stdout=log, stderr=subprocess.STDOUT,
                                     start_new_session=True)
             self._proc, self._run_id = proc, run_id

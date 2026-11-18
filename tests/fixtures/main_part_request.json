@@ -1,0 +1,53 @@
+{
+  "_comment": "Taught points of the reference pick of cad/main_part.step (part frame, mm). partFile is filled in by the tests.",
+  "partFileName": "main_part.step",
+  "partWorldPose": {
+    "position": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "orientation": {
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "w": 1
+    }
+  },
+  "robotId": "ec66",
+  "gripperId": "2f85",
+  "tcpOffset": 145,
+  "preGraspDistance": 100,
+  "points": [
+    {
+      "point": {
+        "x": 8.167,
+        "y": -35.855,
+        "z": 92.201
+      },
+      "normal": {
+        "x": 0.174,
+        "y": -0.985,
+        "z": 0
+      }
+    },
+    {
+      "point": {
+        "x": 6.213,
+        "y": -25.436,
+        "z": 92.146
+      },
+      "normal": {
+        "x": -0.174,
+        "y": 0.985,
+        "z": 0
+      }
+    }
+  ],
+  "pickOffsetMm": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+  },
+  "graspPose": null
+}
