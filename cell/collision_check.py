@@ -17,8 +17,8 @@ from dataclasses import dataclass
 import numpy as np
 import mujoco
 
-from frames import T_to_pos_quat
-from ik import N_ARM
+from .frames import T_to_pos_quat
+from .ik import N_ARM
 
 MARGIN_M = 0.02        # contacts are reported up to this distance; must exceed every clearance used
 SELF_TOL_M = 0.001

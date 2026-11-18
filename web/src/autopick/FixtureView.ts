@@ -1,5 +1,5 @@
 /**
- * Shows the pick fixture (sim_config.json pick_station) in the 3D view under the part made for it
+ * Shows the pick fixture (config/cell.json pick_station) in the 3D view under the part made for it
  * (pick_station.seated_part), so the grasp points are taught with the part as it sits in the cell.
  *
  * Both STEPs are drawn in the same CAD frame (the simulator seats the part with that same fit), so the fixture

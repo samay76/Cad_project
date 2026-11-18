@@ -5,7 +5,7 @@
  *   -> contents of status.json written by the Python process
  *      ({ state: 'running' | 'done' | 'failed', phase, message, ok }).
  *
- * Automatic pick & place (jenga_mujoco/auto_pick_place.py):
+ * Automatic pick & place (cell/auto_pick_place.py):
  * POST /api/mujoco/auto/plan  { partFileName, partFileBase64, partWorldPose, robotId, gripperId, tcpOffset,
  *                               preGraspDistance, points: [{ point, normal }, { point, normal }] }
  *   -> plans in the background (no window); poll /api/mujoco/status with the returned runId.
@@ -14,7 +14,7 @@
  *   -> opens the MuJoCo window for that plan; poll /api/mujoco/status again.
  *
  * POST /api/mujoco/auto/real  { runId, candidate, robotIp, robotSrc?, speed, gripper?: boolean, action?: 'real' | 'home' }
- *   gripper: drive the real Robotiq 2F-85 on USB during Real Sim (sim_config.json real_gripper)
+ *   gripper: drive the real Robotiq 2F-85 on USB during Real Sim (config/cell.json real_gripper)
  *   ("Real Sim", or "Go Home": only bring the robot to the plan's home pose)
  *   -> moves the real Elite EC66 through the plan's joints (auto_pick_place.py --mode real, real_robot.py),
  *      the MuJoCo window following it live. robotIp 'fake' = simulated robot.
@@ -59,9 +59,9 @@ function readBody(req: IncomingMessage): Promise<string> {
 }
 
 export function mujocoBridgePlugin(): Plugin {
-  const simDir = path.resolve(process.cwd(), 'jenga_mujoco');
-  const runsDir = path.join(simDir, 'runs');
-  const autoScript = path.join(simDir, 'auto_pick_place.py');
+  const repo = path.resolve(process.cwd(), '..'); // the dev server runs in web/
+  const runsDir = path.join(process.env.CELL_DATA_DIR || path.join(repo, 'var'), 'runs');
+  const configFile = process.env.CELL_CONFIG || path.join(repo, 'config', 'cell.json');
   const python =
     process.env.MUJOCO_PYTHON || path.join(os.homedir(), 'miniforge3/envs/mujoco_cad/bin/python');
 
@@ -69,7 +69,7 @@ export function mujocoBridgePlugin(): Plugin {
   let childRunId: string | null = null;
 
   const pythonMissing = () =>
-    `Python not found at ${python}. Create the env (see jenga_mujoco/CAD_SIM.md) or set MUJOCO_PYTHON.`;
+    `Python not found at ${python}. Create the env (see README.md) or set MUJOCO_PYTHON.`;
 
   const newRunDir = (partFileName: string, partFileBase64: string) => {
     const runId = `${new Date().toISOString().replace(/[:.]/g, '-')}`;
@@ -82,15 +82,15 @@ export function mujocoBridgePlugin(): Plugin {
   };
 
   /** Starts a simulator process for a run. Only one at a time: any previous one is stopped. */
-  const launch = (runId: string, runDir: string, scriptPath: string, args: string[]) => {
+  const launch = (runId: string, runDir: string, args: string[]) => {
     if (child && child.exitCode === null) child.kill('SIGTERM');
 
     const statusPath = path.join(runDir, 'status.json');
     fs.writeFileSync(statusPath, JSON.stringify({ state: 'running', phase: 'starting', message: 'Starting simulator...' }));
 
     const log = fs.createWriteStream(path.join(runDir, 'log.txt'), { flags: 'a' });
-    const proc = spawn(python, [scriptPath, ...args, '--status', statusPath], {
-      cwd: simDir,
+    const proc = spawn(python, ['-m', 'cell.auto_pick_place', ...args, '--status', statusPath], {
+      cwd: repo,
       env: { ...process.env, DISPLAY: process.env.DISPLAY || ':0', PYTHONUNBUFFERED: '1' }
     });
     child = proc;
@@ -169,7 +169,7 @@ export function mujocoBridgePlugin(): Plugin {
                 2
               )
             );
-            launch(runId, runDir, autoScript, [
+            launch(runId, runDir, [
               '--request', requestPath, '--plan', path.join(runDir, 'plan.json'), '--mode', 'plan'
             ]);
             return sendJson(res, 200, { ok: true, runId });
@@ -205,7 +205,7 @@ export function mujocoBridgePlugin(): Plugin {
             const runDir = path.join(runsDir, id);
             const planPath = path.join(runDir, 'plan.json');
             if (!fs.existsSync(planPath)) return sendJson(res, 404, { ok: false, message: `No plan for run ${id}` });
-            launch(id, runDir, autoScript, [
+            launch(id, runDir, [
               '--request', path.join(runDir, 'request.json'), '--plan', planPath,
               '--mode', body.mode, '--candidate', String(candidate)
             ]);
@@ -239,7 +239,7 @@ export function mujocoBridgePlugin(): Plugin {
             const runDir = path.join(runsDir, id);
             const planPath = path.join(runDir, 'plan.json');
             if (!fs.existsSync(planPath)) return sendJson(res, 404, { ok: false, message: `No plan for run ${id}` });
-            launch(id, runDir, autoScript, [
+            launch(id, runDir, [
               '--request', path.join(runDir, 'request.json'), '--plan', planPath,
               '--mode', action, '--candidate', String(candidate),
               '--robot-ip', ip, '--speed', String(speed), ...(src ? ['--robot-src', src] : []),
@@ -261,13 +261,12 @@ export function mujocoBridgePlugin(): Plugin {
         }
 
         if (url.pathname === '/api/mujoco/fixture' && req.method === 'GET') {
-          // The pick fixture and the part made for it (sim_config.json pick_station), for the 3D view.
+          // The pick fixture and the part made for it (config/cell.json pick_station), for the 3D view.
           try {
-            const cfg = JSON.parse(fs.readFileSync(path.join(simDir, 'sim_config.json'), 'utf8'));
+            const cfg = JSON.parse(fs.readFileSync(configFile, 'utf8'));
             const ps = cfg?.pick_station ?? {};
             const seatAll = !!ps.seat_all_parts;
             if (!ps.enabled || !ps.file || (!ps.seated_part && !seatAll)) return sendJson(res, 200, { ok: true, fixture: null });
-            const repo = path.resolve(simDir, '..');
             const abs = (p: string) => (path.isAbsolute(p) ? p : path.join(repo, p));
             const fixture = fs.readFileSync(abs(ps.file));
             const seated = ps.seated_part ? fs.readFileSync(abs(ps.seated_part)) : Buffer.alloc(0);

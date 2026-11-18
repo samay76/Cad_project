@@ -8,7 +8,7 @@ import time
 
 import numpy as np
 
-from ik import solve as ik_solve, N_ARM
+from .ik import solve as ik_solve, N_ARM
 
 LINE_STEP_M = 0.004       # spacing of IK poses along a straight TCP line
 MAX_JOINT_JUMP = 0.5      # rad between consecutive line poses; more means an arm reconfiguration

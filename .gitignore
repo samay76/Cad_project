@@ -1,17 +1,21 @@
-node_modules
-dist
-.DS_Store
-*.log
+# Dependencies and build output
+node_modules/
+web/dist/
 
-# MuJoCo CAD simulation (generated)
-jenga_mujoco/runs/
-jenga_mujoco/assets/cad_parts/
+# Runtime data: converted-mesh caches and one folder per web run (paths.py DATA, CELL_DATA_DIR)
+var/
+
+# Python
 __pycache__/
-jenga_mujoco/assets/gripper_hulls/
-jenga_mujoco/assets/table_base/
-jenga_mujoco/assets/pick_station/
-# Jenga ACT training artifacts (too large for git; checkpoint > GitHub's 100 MB limit)
-jenga_mujoco/outputs/
-jenga_mujoco/data/
-*.mjb
+*.pyc
+.venv/
 
+# Local machine settings
+.env
+
+# Logs and editor files
+*.log
+MUJOCO_LOG.TXT
+.DS_Store
+*.mjb
+.vite/

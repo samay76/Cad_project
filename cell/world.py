@@ -4,11 +4,11 @@ The table top is at z = 0; the robot stands on the table's mounting plate (table
 """
 import mujoco
 
-from table_base import add_table
+from .table_base import add_table
 
 G = mujoco.mjtGeom
 
-TRAY_XY = (0.55, 0.15)       # default tray centre (sim_config.json place_xy)
+TRAY_XY = (0.55, 0.15)       # default tray centre (config/cell.json place_xy)
 TRAY_HALF = (0.065, 0.050)   # inner half-size of the target tray (m); bigger parts get a bigger one
 
 
@@ -18,7 +18,7 @@ def add_world(spec, tray_xy=TRAY_XY, tray_half=TRAY_HALF, pick_station=None):
     w = spec.worldbody
     add_table(spec)
     if pick_station is not None:
-        from pick_station import add_to_spec
+        from .pick_station import add_to_spec
         add_to_spec(spec, *pick_station)
 
     bx, by = (float(v) for v in tray_xy)

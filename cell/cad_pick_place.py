@@ -17,20 +17,19 @@ import numpy as np
 import mujoco
 import mujoco.viewer
 
-from build_robot import build
-from frames import make_T, inv, T_to_pos_quat, web_pose_to_T, T_gbase_tcp, body_T, site_T
-from ik import solve as ik_solve, N_ARM
-from robots import get_robot
-from step_to_mesh import convert, is_mesh_file
-from cad_part import PART_BODY
-from pick_station import from_config as from_station_config, is_seated_part, seated_pose
+from .build_robot import build
+from .frames import make_T, inv, T_to_pos_quat, web_pose_to_T, T_gbase_tcp, body_T, site_T
+from .ik import solve as ik_solve, N_ARM
+from .robots import get_robot
+from .step_to_mesh import convert, is_mesh_file
+from .cad_part import PART_BODY
+from .pick_station import from_config as from_station_config, is_seated_part, seated_pose
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TCP_SITE = 'g_tcp'
 GRIP_OPEN, GRIP_CLOSED = 0.0, 255.0
 GRIPPER_NAMES = {'2f85': 'Robotiq 2F-85'}
 GRIPPER_OPEN_MM = {'2f85': 85.0}
-# How the arm goes to pick (sim_config.json "pick_motion" overrides these). Speeds are peak values.
+# How the arm goes to pick (config/cell.json "pick_motion" overrides these). Speeds are peak values.
 PICK_MOTION_DEFAULTS = {
     'home_tcp_m': [0.40, 0.0, 0.40],  # home: gripper pointing straight down, up over the middle of the table
     'orient_first': True,             # turn the gripper at home, then travel without turning
@@ -47,7 +46,7 @@ GHOST_RGBA_BAD = [0.95, 0.15, 0.15, 0.45]
 
 
 def robot_base_offset(cfg, robot_id):
-    """Calibration (x, y, z mm) of the real robot base vs the table CAD: sim_config.json robot_base_offset_mm."""
+    """Calibration (x, y, z mm) of the real robot base vs the table CAD: config/cell.json robot_base_offset_mm."""
     v = (cfg.get('robot_base_offset_mm') or {}).get(robot_id)
     if v is None:
         return (0.0, 0.0, float((cfg.get('robot_height_offset_mm') or {}).get(robot_id, 0.0)))   # older config key
@@ -178,7 +177,7 @@ def tray_half_for(verts_w, com_w, cfg):
     The part is placed with its centre of mass over place_xy, turned about the vertical by 0 or 90 deg first,
     so the tray is a square that holds the footprint's farthest X or Y extent from the COM, plus a margin.
     Parts that fit the original tray keep it (TRAY_HALF), so existing results do not change."""
-    from world import TRAY_HALF
+    from .world import TRAY_HALF
     reach = np.abs(verts_w[:, :2] - com_w[:2]).max()
     need = reach + float(cfg.get('tray_margin_m', 0.012))
     return (max(TRAY_HALF[0], need), max(TRAY_HALF[1], need)) if need > min(TRAY_HALF) else tuple(TRAY_HALF)

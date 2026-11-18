@@ -8,17 +8,17 @@ accepts, e.g. fingers inserted into a 36 mm bore for an inside grip.
 
 refine(grip_spec) replaces these collision geoms by a CoACD convex decomposition of the same mesh
 (same body, pose and contact parameters). Visual geoms are untouched. Pieces are cached in
-assets/gripper_hulls/.
+var/cache/gripper_hulls/.
 """
 import json
 import os
 
 import numpy as np
 import mujoco
+from .paths import CACHE, MODELS
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MESH_DIR = os.path.join(BASE_DIR, 'robotiq_2f85', 'assets')
-CACHE_DIR = os.path.join(BASE_DIR, 'assets', 'gripper_hulls')
+MESH_DIR = os.path.join(MODELS, 'robotiq_2f85', 'assets')
+CACHE_DIR = os.path.join(CACHE, 'gripper_hulls')
 REFINE = ('tongue', 'follower')
 THRESHOLD = 0.05
 MAX_PIECES = 8

@@ -9,15 +9,15 @@ import os
 from dataclasses import dataclass
 
 import numpy as np
+from .paths import MODELS
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 @dataclass(frozen=True)
 class RobotSpec:
     id: str
     label: str
-    xml: str                      # relative to jenga_mujoco/
+    xml: str                      # relative to models/
     flange_body: str              # body that carries the tool flange
     flange_pos: tuple             # tool flange in flange_body (m)
     flange_quat: tuple            # (w, x, y, z), +Z out of the flange
@@ -28,7 +28,7 @@ class RobotSpec:
 
     @property
     def xml_path(self):
-        return os.path.join(BASE_DIR, self.xml)
+        return os.path.join(MODELS, self.xml)
 
     @property
     def home_qpos(self):
@@ -39,7 +39,7 @@ ROBOTS = {
     'ec66': RobotSpec(
         id='ec66', label='Elite EC66', xml='ec66/ec66.xml',
         flange_body='link6', flange_pos=(0.0, -0.089, 0.0), flange_quat=(0.0, 0.0, -0.707107, 0.707107),
-        # Default elbow-up posture; the real home is sim_config.json pick_motion.home_joints_deg.ec66.
+        # Default elbow-up posture; the real home is config/cell.json pick_motion.home_joints_deg.ec66.
         home=(0.045, -1.284, 1.705, -2.022, 1.569, 0.045),
         base_bodies=('base_link', 'link1'),
         # Lower gains than a heavy arm: higher ones follow the corners of the piecewise-linear joint path

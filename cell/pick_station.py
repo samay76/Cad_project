@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-pick_station.py - The pick fixture (../Cad model/Fixture.step) the part is picked from.
+pick_station.py - The pick fixture (cad/Fixture.step) the part is picked from.
 
 The station is a pedestal: a base plate with screw holes and a vertical column. It is bolted to the
 table: its screw holes are put on the table's hole grid (table_base.HOLE_GRID_*), on the grid position
-nearest pick_station.near_xy in sim_config.json. The part is set on the column's top face, centred on
+nearest pick_station.near_xy in config/cell.json. The part is set on the column's top face, centred on
 the column axis, and everything that used "the part on the table at pick_xy" now uses that point:
 CadPickPlace replaces cfg['pick_xy'] with the column axis and plans from the top face (support_z).
 
-Fixture mode (pick_station.seated_part in sim_config.json): a part made for this fixture (e.g. Cad model/
-main_part.step on Cad model/Fixture.step) is put on it exactly as the two STEPs fit together: both are drawn in
+Fixture mode (pick_station.seated_part in config/cell.json): a part made for this fixture (e.g. cad/
+main_part.step on cad/Fixture.step) is put on it exactly as the two STEPs fit together: both are drawn in
 the same CAD frame, so the part keeps its STEP coordinates relative to the fixture's (seated_pose). Its CoACD
 hulls fill the socket that slides over the fixture top, so instead of resting on contacts the part is held by a
 weld (FIXTURE_WELD) until the gripper has closed on it (release_weld), and part <-> fixture contacts are off.
 Any other part still sits on the top face as before.
 
-The geometry (holes, column, top face) is read from the STEP once and cached in assets/pick_station/.
-  python pick_station.py      # prints where the station goes and how well its holes match the table's
+The geometry (holes, column, top face) is read from the STEP once and cached in var/cache/pick_station/.
+  python -m cell.pick_station      # prints where the station goes and how well its holes match the table's
 """
 import glob
 import hashlib
@@ -27,12 +27,12 @@ import sys
 import mujoco
 import numpy as np
 
-from table_base import HOLE_GRID_ORIGIN, HOLE_GRID_PITCH, HOLE_GRID_MAX
+from .paths import CACHE, CAD, repo_path, load_config
+from .table_base import HOLE_GRID_ORIGIN, HOLE_GRID_PITCH, HOLE_GRID_MAX
 
 G = mujoco.mjtGeom
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_STEP = os.path.join(BASE_DIR, '..', 'Cad model', 'Fixture.step')
-CACHE_DIR = os.path.join(BASE_DIR, 'assets', 'pick_station')
+DEFAULT_STEP = os.path.join(CAD, 'Fixture.step')
+CACHE_DIR = os.path.join(CACHE, 'pick_station')
 CONVERTER_VERSION = 2          # 2: + top disc (fixtures with a wider top than the column)
 MAX_HOLE_ERROR_MM = 1.0       # a station hole further than this from a table hole does not fit a screw
 STATION_BODY = 'pickstation'  # fixture mode: the station geoms are on this static body (for the contact exclude)
@@ -54,7 +54,7 @@ def analyse(step_path):
     from OCP.TopAbs import TopAbs_FACE
     from OCP.TopExp import TopExp_Explorer
     from OCP.TopoDS import TopoDS
-    from step_to_mesh import read_step, triangulate
+    from .step_to_mesh import read_step, triangulate
 
     shape = read_step(step_path)
     to_face = getattr(TopoDS, 'Face_s', None) or TopoDS.Face
@@ -189,8 +189,8 @@ def place(info, near_xy, yaw_deg=0.0):
 
 
 def _abs(path):
-    """Paths in sim_config.json are relative to the repo root."""
-    return path if os.path.isabs(path) else os.path.normpath(os.path.join(BASE_DIR, '..', path))
+    """Paths in config/cell.json are relative to the repo root."""
+    return repo_path(path)
 
 
 def is_seated_part(placement, step_path):
@@ -200,7 +200,7 @@ def is_seated_part(placement, step_path):
         return True
     if not placement or not placement.get('seated_part') or not os.path.exists(placement['seated_part']):
         return False
-    from step_to_mesh import file_hash
+    from .step_to_mesh import file_hash
     return file_hash(step_path) == file_hash(placement['seated_part'])
 
 
@@ -225,19 +225,19 @@ def release_weld(model, data):
     was = bool(data.eq_active[eq])
     data.eq_active[eq] = 0
     if was:
-        from cad_part import PART_BODY
+        from .cad_part import PART_BODY
         model.body_gravcomp[model.body(PART_BODY).id] = 1.0
     return was
 
 
 def drop_payload(model):
     """The gripper lets go: the part has its weight again (no-op unless release_weld compensated it)."""
-    from cad_part import PART_BODY
+    from .cad_part import PART_BODY
     model.body_gravcomp[model.body(PART_BODY).id] = 0.0
 
 
 def from_config(cfg):
-    """(info, placement) for sim_config.json's pick_station, or (None, None) when it is off."""
+    """(info, placement) for config/cell.json's pick_station, or (None, None) when it is off."""
     ps = cfg.get('pick_station') or {}
     if not ps.get('enabled', False):
         return None, None
@@ -288,7 +288,7 @@ def add_to_spec(spec, info, placement, seat_part=False):
                    pos=[*world_xy(info['column_xy_mm']), z0 + info['top_z_mm'] / 1000.0 - h / 2],
                    friction=[1.0, 0.005, 0.0001], **hidden)
     if seat_part:
-        from cad_part import PART_BODY
+        from .cad_part import PART_BODY
         spec.add_exclude(bodyname1=STATION_BODY, bodyname2=PART_BODY)
         # data = anchor (3), part pose in the station body frame (= world: the body sits at the origin; pos 3 +
         # quat 4), torquescale
@@ -299,8 +299,7 @@ def add_to_spec(spec, info, placement, seat_part=False):
 
 
 if __name__ == '__main__':
-    with open(os.path.join(BASE_DIR, 'sim_config.json')) as fh:
-        cfg = json.load(fh)
+    cfg = load_config()
     cfg.setdefault('pick_station', {})['enabled'] = True
     info, p = from_config(cfg)
     print(json.dumps({k: v for k, v in info.items() if k != 'visual_stl'}, indent=1))

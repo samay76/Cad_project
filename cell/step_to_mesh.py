@@ -16,8 +16,8 @@ Mesh parts (.stl / .obj) are read in mm like the web viewer
 shows them. Their mass properties come from the closed mesh (trimesh); an open mesh falls back to its convex hull.
 
 Usage:
-  python step_to_mesh.py ../tests/fixtures/skf_cam_roller_305703_c-2z_0.stp            # -> assets/cad_parts/<hash>/
-  python step_to_mesh.py part.stp --out /tmp/part --density 7850 --max-hulls 24
+  python -m cell.step_to_mesh tests/fixtures/skf_cam_roller_305703_c-2z_0.stp    # -> var/cache/cad_parts/<hash>/
+  python -m cell.step_to_mesh part.stp --out /tmp/part --density 7850 --max-hulls 24
 """
 import argparse
 import hashlib
@@ -26,12 +26,12 @@ import os
 import sys
 
 import numpy as np
+from .paths import CACHE
 
 MM_TO_M = 0.001
 STEEL_DENSITY = 7850.0  # kg/m^3
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_CACHE = os.path.join(BASE_DIR, 'assets', 'cad_parts')
+DEFAULT_CACHE = os.path.join(CACHE, 'cad_parts')
 CONVERTER_VERSION = 1  # bump to invalidate cached conversions
 MESH_EXTENSIONS = ('.stl', '.obj')
 
@@ -249,7 +249,7 @@ def main():
     if args.view:
         import mujoco
         import mujoco.viewer
-        from cad_part import add_cad_part
+        from .cad_part import add_cad_part
         spec = mujoco.MjSpec()
         spec.worldbody.add_light(pos=[0, 0, 1], dir=[0, 0, -1])
         add_cad_part(spec, meta, pos=[0, 0, 0], quat=[1, 0, 0, 0], free=False, hull_alpha=0.5)

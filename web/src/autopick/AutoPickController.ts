@@ -1,9 +1,9 @@
 /**
  * Runs the automatic pick & place workflow in the web app:
  *   Load STEP / mesh -> mark two points, one per finger -> plan -> preview -> Sim -> Real Sim.
- * Real Sim (jenga_mujoco/real_robot.py) moves the real EC66 through the planned joints; it is enabled only once the
+ * Real Sim (cell/real_robot.py) moves the real EC66 through the planned joints; it is enabled only once the
  * Sim of the same plan and grasp has run to the end.
- * Grasp and motion planning happen in Python (jenga_mujoco/auto_pick_place.py), reached through the
+ * Grasp and motion planning happen in Python (cell/auto_pick_place.py), reached through the
  * dev-server bridge. This class keeps the workflow state and connects the panel, viewer and bridge.
  */
 import * as THREE from 'three';
@@ -41,7 +41,7 @@ export interface AutoPickDeps {
 const POLL_MS = 500;
 const ORIENTATION_TOLERANCE_DEG = 0.5;
 const MIN_POINT_DISTANCE_MM = 2;
-/** Part files the simulator converts (jenga_mujoco/step_to_mesh.py). Meshes are in mm, like the viewer shows them. */
+/** Part files the simulator converts (cell/step_to_mesh.py). Meshes are in mm, like the viewer shows them. */
 export const SIM_PART_FILE = /\.(stp|step|stl|obj)$/i;
 const REAL_SETTINGS_KEY = 'autopick.realRobot';
 const PICK_OFFSET_KEY = 'autopick.pickOffset';

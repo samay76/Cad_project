@@ -5,11 +5,11 @@ auto_pick_place.py - Geometry-aware pick & place: click a point on a STEP part, 
 Launched by the web app's Auto Pick & Place panel (vite-plugins/mujocoBridge.ts), or by hand:
 
   # one finger on each marked point: x,y,z,nx,ny,nz in the part frame (mm, surface normal)
-  python auto_pick_place.py --step part.step --point1=0,0,10,0,-1,0 --point2=0,30,10,0,1,0 --mode plan --plan plan.json
+  python -m cell.auto_pick_place --step part.step --point1=0,0,10,0,-1,0 --point2=0,30,10,0,1,0 --mode plan --plan plan.json
   # or a single point: the grasp is searched near it
-  python auto_pick_place.py --step part.step --click 0,20,0 --normal 0,1,0 --mode plan --plan plan.json
-  python auto_pick_place.py --step part.step --plan plan.json --mode preview     # watch it, no physics
-  python auto_pick_place.py --step part.step --plan plan.json --mode execute     # run it with physics
+  python -m cell.auto_pick_place --step part.step --click 0,20,0 --normal 0,1,0 --mode plan --plan plan.json
+  python -m cell.auto_pick_place --step part.step --plan plan.json --mode preview     # watch it, no physics
+  python -m cell.auto_pick_place --step part.step --plan plan.json --mode execute     # run it with physics
   add --headless --snapshots out/ to run without a window
 
 Modes:
@@ -30,7 +30,7 @@ Each module is responsible for one thing:
 
 Sequence: home -> turn the gripper to the grasp orientation (in place) -> straight to the pre-grasp ->
 grasp -> close -> lift -> transfer -> place in the tray -> open -> retreat -> home.
-With sim_config.json grasp_test.enabled: grasp -> wait -> close -> hold -> open -> back out -> home (the part stays
+With config/cell.json grasp_test.enabled: grasp -> wait -> close -> hold -> open -> back out -> home (the part stays
 in the fixture).
 """
 import argparse
@@ -45,20 +45,20 @@ from collections import Counter
 import numpy as np
 import mujoco
 
-from cad_part import PART_JOINT
-from pick_station import release_weld, drop_payload, STATION_BODY
-from cad_pick_place import CadPickPlace, PlanError, Status, GRIP_CLOSED, GRIP_OPEN, GRIPPER_NAMES, TCP_SITE
-from collision_check import SceneCollision
-from ik import solve as ik_solve
-from frames import T_to_pos_quat, inv, make_T, pose_error, quat_xyzw_to_wxyz, site_T
-from grasp_planner import (Candidate, GraspParams, PointsError, RayMesh, _in_cavity, classify_points, gap_at_click,
+from .cad_part import PART_JOINT
+from .pick_station import release_weld, drop_payload, STATION_BODY
+from .cad_pick_place import CadPickPlace, PlanError, Status, GRIP_CLOSED, GRIP_OPEN, GRIPPER_NAMES, TCP_SITE
+from .collision_check import SceneCollision
+from .ik import solve as ik_solve
+from .frames import T_to_pos_quat, inv, make_T, pose_error, quat_xyzw_to_wxyz, site_T
+from .grasp_planner import (Candidate, GraspParams, PointsError, RayMesh, _in_cavity, classify_points, gap_at_click,
                            generate_candidates, grasps_from_points)
-from gripper_geometry import GripperGeometry
-from ik import N_ARM
-from motion_planner import MotionError, MotionPlanner, joint_path_length
-from robots import ROBOTS
+from .gripper_geometry import GripperGeometry
+from .ik import N_ARM
+from .motion_planner import MotionError, MotionPlanner, joint_path_length
+from .robots import ROBOTS
+from .paths import CONFIG_FILE
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_TCP_MM = {'2f85': 145.0}
 PLAN_VERSION = 1
 SETTLE_MAX_S = 6.0
@@ -542,7 +542,7 @@ class AutoPickPlace(CadPickPlace):
         ]
 
     def _plan_grasp_test(self, cand, T_wp, T_pre, T_grasp, T_part_tcp, q_pre, approach, width_in, hold):
-        """sim_config.json grasp_test (sim-to-real grasp check): go to the pick point, wait, close the gripper on
+        """config/cell.json grasp_test (sim-to-real grasp check): go to the pick point, wait, close the gripper on
         the part in the fixture, hold, open, back out along the approach line and return home the way it came.
         No lift, no camera, no place: the part stays in the fixture."""
         gt = self.grasp_test
@@ -880,7 +880,7 @@ class AutoPickPlace(CadPickPlace):
                         raise PlanError(f"The part was not picked up (rose {rose * 1000:.0f} mm of "
                                         f"{cfg['lift_height_m'] * 1000:.0f} mm). The grip did not hold its "
                                         f"{self.meta['mass_kg'] * 1000:.0f} g: try another grasp "
-                                        'or raise the grip force in sim_config.json.')
+                                        'or raise the grip force in config/cell.json.')
                 if name == 'transfer':
                     slip = pose_error(inv(site_T(self.model, self.data, TCP_SITE)) @ self.part_T(), T_tcp_part0)
                     st.info['slip_during_transport'] = {'mm': round(slip[0], 2), 'deg': round(slip[1], 2)}
@@ -1033,7 +1033,7 @@ def main():
     ap.add_argument('--robot-src', help='real mode: local IP to connect from (optional)')
     ap.add_argument('--speed', type=float, default=5.0, help='real mode: joint speed in %% (1..10)')
     ap.add_argument('--real-gripper', action='store_true',
-                    help='real mode: drive the real Robotiq 2F-85 on USB (sim_config.json real_gripper)')
+                    help='real mode: drive the real Robotiq 2F-85 on USB (config/cell.json real_gripper)')
     ap.add_argument('--request', help='request.json written by the web app bridge')
     ap.add_argument('--status', help='status.json to update (polled by the web app)')
     ap.add_argument('--plan', required=True, help='plan.json: written by --mode plan, read by the other modes')
@@ -1046,7 +1046,7 @@ def main():
     ap.add_argument('--pick-offset', help='move the grasp by x,y,z mm in the robot base frame (web: Pick Offset)')
     ap.add_argument('--robot', choices=list(ROBOTS))
     ap.add_argument('--gripper', choices=list(GRIPPER_NAMES))
-    ap.add_argument('--config', default=os.path.join(BASE_DIR, 'sim_config.json'))
+    ap.add_argument('--config', default=CONFIG_FILE)
     ap.add_argument('--headless', action='store_true')
     ap.add_argument('--snapshots', help='directory for per-phase PNGs (headless)')
     args = ap.parse_args()
@@ -1093,7 +1093,7 @@ def main():
         if args.mode in ('real', 'home'):
             if not args.robot_ip:
                 raise PlanError('Real mode needs --robot-ip.')
-            from real_robot import run_on_real_robot
+            from .real_robot import run_on_real_robot
             try:
                 message = run_on_real_robot(sim, doc, plan, args.robot_ip, args.robot_src, args.speed,
                                             go_home=args.mode == 'home',

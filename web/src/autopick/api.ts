@@ -1,5 +1,5 @@
 /**
- * Types and requests for the automatic pick & place (vite-plugins/mujocoBridge.ts, jenga_mujoco/auto_pick_place.py).
+ * Types and requests for the automatic pick & place (vite-plugins/mujocoBridge.ts, cell/auto_pick_place.py).
  * All poses are in the part's starting frame, in mm, with quaternions in xyzw order.
  */
 import type { Pose, SavedGrasp, Vector3D } from '../types';
@@ -20,7 +20,7 @@ export interface GraspPlan {
   approachTiltDeg: number;
   score: number;
   durationS: number;
-  graspTest?: boolean; // sim_config grasp_test: go, close, hold, open, home (no lift / place)
+  graspTest?: boolean; // config grasp_test: go, close, hold, open, home (no lift / place)
   T_tcp_part: number[][];
   phases: PlanPhase[];
 }
@@ -100,7 +100,7 @@ export const fetchStatus = async (runId: string): Promise<SimStatus> => {
   return resp.json();
 };
 
-/** Real robot connection for "Real Sim" (jenga_mujoco/real_robot.py). ip 'fake' = simulated robot. */
+/** Real robot connection for "Real Sim" (cell/real_robot.py). ip 'fake' = simulated robot. */
 export interface RealRobotSettings {
   ip: string;
   src: string; // local IP to connect from, optional

@@ -13,8 +13,8 @@ from dataclasses import dataclass
 import numpy as np
 import mujoco
 
-from frames import inv, site_T
-from ik import N_ARM
+from .frames import inv, site_T
+from .ik import N_ARM
 
 FACE_TOL = 0.0015  # a geom belongs to the gripping face if it comes this close to the inner limit (m)
 _CORNERS = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)], dtype=float)

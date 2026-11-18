@@ -1,13 +1,13 @@
 import os
 import argparse
 import mujoco, mujoco.viewer
-from world import add_world
-from table_base import MOUNT_PLATE_TOP_Z
-from cameras import add_cameras
-from frames import T_gbase_tcp, T_to_pos_quat
-from robots import get_robot, DEFAULT_ROBOT
+from .paths import MODELS
+from .world import add_world
+from .table_base import MOUNT_PLATE_TOP_Z
+from .cameras import add_cameras
+from .frames import T_gbase_tcp, T_to_pos_quat
+from .robots import get_robot, DEFAULT_ROBOT
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def build(cad_meta=None, part_pos=(0.45, -0.10, 0.03), part_quat=(1, 0, 0, 0), tcp_offset_mm=145.0, gravcomp=False,
@@ -19,7 +19,7 @@ def build(cad_meta=None, part_pos=(0.45, -0.10, 0.03), part_quat=(1, 0, 0, 0), t
     gravcomp       : compensate arm/gripper weight (an ideal cobot controller)
     fine_fingers   : decompose the finger meshes into several convex pieces (finger_collision.py) so thin
                      fingertips fit where they really fit
-    tray_xy        : centre of the target tray (sim_config.json place_xy); tray_half its inner half-size (m)
+    tray_xy        : centre of the target tray (config/cell.json place_xy); tray_half its inner half-size (m)
     pick_station   : (info, placement, seat_part) from pick_station.from_config: the fixture the part is picked from
     extra(spec)    : optional callback to add more elements (e.g. the ghost gripper) before compiling
     base_offset_mm : calibration (x, y, z mm): where the real robot base really is relative to the table CAD.
@@ -31,7 +31,7 @@ def build(cad_meta=None, part_pos=(0.45, -0.10, 0.03), part_quat=(1, 0, 0, 0), t
         raise ValueError(f"Unknown gripper '{gripper}' (only the Robotiq 2F-85 '2f85')")
     rob = get_robot(robot)
     arm_xml = rob.xml_path
-    grip_xml = os.path.join(BASE_DIR, 'robotiq_2f85', '2f85.xml')
+    grip_xml = os.path.join(MODELS, 'robotiq_2f85', '2f85.xml')
     arm = mujoco.MjSpec.from_file(arm_xml)
     grip = mujoco.MjSpec.from_file(grip_xml)
 
@@ -59,7 +59,7 @@ def build(cad_meta=None, part_pos=(0.45, -0.10, 0.03), part_quat=(1, 0, 0, 0), t
                                rgba=[0, 1, 1, 0.8], group=4)
 
     if fine_fingers:
-        from finger_collision import refine
+        from .finger_collision import refine
         refine(grip)
 
     mount_pos = list(rob.flange_pos)
@@ -86,7 +86,7 @@ def build(cad_meta=None, part_pos=(0.45, -0.10, 0.03), part_quat=(1, 0, 0, 0), t
     world_kw = {k: v for k, v in (('tray_xy', tray_xy), ('tray_half', tray_half)) if v is not None}
     add_world(arm, pick_station=pick_station, **world_kw)
     if cad_meta is not None:
-        from cad_part import add_cad_part
+        from .cad_part import add_cad_part
         add_cad_part(arm, cad_meta, pos=part_pos, quat=part_quat)
 
     add_cameras(arm)
@@ -103,7 +103,7 @@ if __name__ == '__main__':
     args = ap.parse_args()
     meta = None
     if args.step:
-        from step_to_mesh import convert
+        from .step_to_mesh import convert
         meta = convert(args.step)
     model = build(cad_meta=meta)
     print('bodies:', model.nbody, 'joints:', model.njnt, 'actuators:', model.nu, 'cameras:', model.ncam)

@@ -3,12 +3,12 @@
 show_locations.py - Where the sim puts the part (pick) and where it drops it (place), so you can set up the real table
 the same way.
 
-  python show_locations.py                    # the newest plan made in the web app (runs/*/plan.json), grasp 1
-  python show_locations.py --candidate 2      # grasp 2 of that plan
-  python show_locations.py --run runs/<id>    # a specific run
-  python show_locations.py --view             # also open MuJoCo: the part at the pick, a dot at the drop
+  python -m cell.show_locations                    # the newest plan made in the web app (var/runs/*/plan.json), grasp 1
+  python -m cell.show_locations --candidate 2      # grasp 2 of that plan
+  python -m cell.show_locations --run var/runs/<id>    # a specific run
+  python -m cell.show_locations --view             # also open MuJoCo: the part at the pick, a dot at the drop
 
-The pick always follows the current sim_config.json (pick_xy); the drop comes from the newest plan when that plan
+The pick always follows the current config/cell.json (pick_xy); the drop comes from the newest plan when that plan
 was made for the same pick (otherwise it says to re-plan).
 
 Coordinates are the sim's world frame in mm: x/y from the robot base axis, z up from the table top. The robot looks
@@ -28,7 +28,8 @@ import time
 
 import numpy as np
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+from .paths import RUNS, load_config
+
 BIG_HOLE_ORIGIN = (-0.1004, -0.3402)   # big 26 mm hole (0, 0), world frame (m) 
 BIG_HOLE_PITCH = 0.040
 BIG_HOLE_N = 17
@@ -66,7 +67,7 @@ def main():
     if args.run:
         run = args.run
     else:
-        plans = glob.glob(os.path.join(BASE_DIR, 'runs', '*', 'plan.json'))
+        plans = glob.glob(os.path.join(RUNS, '*', 'plan.json'))
         if not plans:
             sys.exit('No plan found: press Plan to Points in the web app first.')
         run = os.path.dirname(max(plans, key=os.path.getmtime))
@@ -78,8 +79,8 @@ def main():
           f"{plan['widthMm']:.1f} mm, robot {doc['robotLabel']}, gripper {doc['gripperLabel']}")
 
     # The part's shape comes from the simulator scene (same code as the web app's planner).
-    from auto_pick_place import AutoPickPlace, load_request
-    from cad_pick_place import Status
+    from .auto_pick_place import AutoPickPlace, load_request
+    from .cad_pick_place import Status
 
     class A:
         request = os.path.join(run, 'request.json')
@@ -87,20 +88,20 @@ def main():
     step, req, q_part = load_request(A)
     req = dict(req, robotId=doc['robot'], gripperId=doc['gripper'], tcpOffset=doc['tcpOffset'],
                preGraspDistance=plan['grasp']['preGraspDistance'], grasp=plan['grasp'])
-    cfg = json.load(open(os.path.join(BASE_DIR, 'sim_config.json')))
+    cfg = load_config()
     sim = AutoPickPlace(step, req, q_part, cfg, Status(None), headless=not args.view)
     verts = sim.part_verts
 
-    # The pick comes from the CURRENT sim_config.json: the part is let settle on the table, as the planner does.
+    # The pick comes from the CURRENT config/cell.json: the part is let settle on the table, as the planner does.
     T_pick = sim.settle()
     T_planned = np.array(doc['part']['T_world_part'])
     stale = (np.linalg.norm(T_pick[:3, 3] - T_planned[:3, 3]) > 0.005 or
              abs(np.trace(T_pick[:3, :3].T @ T_planned[:3, :3]) - 3) > 1e-3)
     T_drop = None if stale else np.array(plan['T_wp_placed'])
-    describe('PICK - put the real part here (as it lies on the table in the sim, current sim_config.json):',
+    describe('PICK - put the real part here (as it lies on the table in the sim, current config/cell.json):',
              verts @ T_pick[:3, :3].T + T_pick[:3, 3], T_pick)
     if stale:
-        print("\n  NOTE: the newest plan was made for a different pick location (sim_config.json changed since).")
+        print("\n  NOTE: the newest plan was made for a different pick location (config/cell.json changed since).")
         print("        Press Plan to Points in the web app again before Sim / Real Sim. The drop pose below needs")
         print("        a new plan; the tray position is from the current settings.")
     else:
@@ -117,7 +118,7 @@ def main():
         i, j, dx, dy = nearest_hole(tx / 1000, ty / 1000)
         print(f"\nTRAY (drop location)\n  centre x={tx:.1f} y={ty:.1f} mm (nearest big hole ({i}, {j}), {dx:+.0f} / {dy:+.0f} mm)"
               f", inside {2 * hx:.0f} x {2 * hy:.0f} mm: x {tx - hx:.1f} .. {tx + hx:.1f}, y {ty - hy:.1f} .. {ty + hy:.1f}")
-    print(f"\n(pick_xy {cfg['pick_xy']} m and place_xy {cfg['place_xy']} m in sim_config.json set these positions.)")
+    print(f"\n(pick_xy {cfg['pick_xy']} m and place_xy {cfg['place_xy']} m in config/cell.json set these positions.)")
 
     if args.view:
         import mujoco

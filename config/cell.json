@@ -5,10 +5,10 @@
   "pick_station": {
     "_comment": "The part is picked from the pick station (pickstation.step, repo root). Its screw holes are put on the table's 40 mm hole grid, at the grid position nearest near_xy; the part sits on the column top, centre of mass over the column axis (this replaces pick_xy). enabled=false puts the part back on the table at pick_xy.",
     "enabled": true,
-    "file": "Cad model/Fixture.step",
+    "file": "cad/Fixture.step",
     "near_xy": [0.4996, -0.3402],
     "yaw_deg": 0,
-    "seated_part": "Cad model/main_part.step",
+    "seated_part": "cad/main_part.step",
     "seat_all_parts": true,
     "_seat_all_comment": "true: EVERY part loaded in the web goes on the fixture the way main_part does (its STEP frame = the fixture's STEP frame), because all parts share the same mounting; only the pick points change. Each part's STEP must be exported in the fixture's coordinate frame. false: only seated_part goes on it.",
     "_fixture_comment": "Fixture.step bolted over the big corner hole at pick_xy (its 4 screw holes on the table grid). seated_part = the part made for it: it goes on the fixture as the two STEPs fit together (same CAD frame), held until the gripper closes. Other parts sit on the fixture top."

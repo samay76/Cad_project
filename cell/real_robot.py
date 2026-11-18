@@ -16,7 +16,7 @@ The planned joint paths are dense (straight TCP lines and RRT paths sampled fine
 fewest waypoints whose joint-linear moves (what moveByJoint does) keep the TCP within WAYPOINT_TOL_M of the
 planned path, so the robot stops as few times as possible.
 
-The gripper: with the real 2F-85 enabled (sim_config.json real_gripper, the web app's "Real gripper" box) the
+The gripper: with the real 2F-85 enabled (config/cell.json real_gripper, the web app's "Real gripper" box) the
 grip / release phases drive it over USB (real_gripper.py) and the sim fingers follow it; otherwise they are only
 shown in the sim. The arm holds still while the gripper moves.
 
@@ -31,10 +31,10 @@ import time
 import mujoco
 import numpy as np
 
-from cad_pick_place import PlanError, TCP_SITE
-from real_gripper import FakeGripper, RealGripper, pos_to_width, width_to_pos
-from frames import site_T
-from ik import N_ARM
+from .cad_pick_place import PlanError, TCP_SITE
+from .real_gripper import FakeGripper, RealGripper, pos_to_width, width_to_pos
+from .frames import site_T
+from .ik import N_ARM
 
 POLL_HZ = 20
 REAL_SPEED_DEFAULT = 5          # % joint speed
@@ -389,7 +389,7 @@ class Stopped(Exception):
 def run_on_real_robot(sim, doc, plan, ip, src=None, speed=REAL_SPEED_DEFAULT, go_home=False, gripper_cfg=None,
                       pause_at_pick_s=0.0):
     """Moves the real robot through the plan (or, go_home, only to the plan's home pose by home_route);
-    `sim` (AutoPickPlace) mirrors it. gripper_cfg (sim_config.json real_gripper) drives the real 2F-85 on USB;
+    `sim` (AutoPickPlace) mirrors it. gripper_cfg (config/cell.json real_gripper) drives the real 2F-85 on USB;
     None = the gripper only moves in the sim. Returns a summary."""
     st = sim.status
     if doc.get('robot') != 'ec66':
@@ -503,7 +503,7 @@ def run_on_real_robot(sim, doc, plan, ip, src=None, speed=REAL_SPEED_DEFAULT, go
                     st.info['real_joints_at_pick_deg'] = [round(v, 3) for v in robot.joints()]
                 continue
             if w['kind'] == 'grip' and w.get('squeeze') and pause_at_pick_s > 0:
-                # TEMPORARY TEST (sim_config.json debug_pause_at_pick_s): hold at the pick location with the fingers
+                # TEMPORARY TEST (config/cell.json debug_pause_at_pick_s): hold at the pick location with the fingers
                 # at the plan's approach opening (as in the Sim). Opening fully here would swing a finger that is
                 # inside a cavity across it and change the grasp.
                 t_end = time.time() + pause_at_pick_s

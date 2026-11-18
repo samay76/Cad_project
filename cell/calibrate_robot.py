@@ -3,33 +3,32 @@
 calibrate_robot.py - Measure where the real robot really is relative to the table, so the sim (and the plans made in
 it) put the real gripper exactly where the sim shows it.
 
-  1. Close the gripper fully:   python calibrate_robot.py --close-gripper
+  1. Close the gripper fully:   python -m cell.calibrate_robot --close-gripper
   2. With the teach pendant, jog the robot so the CLOSED FINGERTIPS just touch the table at the CENTRE of a big
      (26 mm) table hole - by default hole (15, 0), the pick hole. Gripper pointing straight down.
-  3. python calibrate_robot.py                       # reads the joints (read-only), prints the error
-     python calibrate_robot.py --hole 16 12          # another hole (i along x, j along y, 0..16)
-     python calibrate_robot.py --write               # also saves the corrected robot_base_offset_mm
-     python calibrate_robot.py --joints 179 -80 ...  # use these joint angles (deg) instead of reading the robot
+  3. python -m cell.calibrate_robot                       # reads the joints (read-only), prints the error
+     python -m cell.calibrate_robot --hole 16 12          # another hole (i along x, j along y, 0..16)
+     python -m cell.calibrate_robot --write               # also saves the corrected robot_base_offset_mm
+     python -m cell.calibrate_robot --joints 179 -80 ...  # use these joint angles (deg) instead of reading the robot
 
 It compares the hole (where the fingertips really are) with where the sim puts the fingertips for those joints, and
-corrects sim_config.json robot_base_offset_mm by the difference. Repeat at a second hole far from the first to check:
+corrects config/cell.json robot_base_offset_mm by the difference. Repeat at a second hole far from the first to check:
 after --write, both should show an error of a millimetre or two.
 
 Reads only: it never moves the robot or the gripper.
 """
 import argparse
 import json
-import os
 import sys
 
 import mujoco
 import numpy as np
 
-from build_robot import build
-from cad_pick_place import FingerMap, robot_base_offset
+from .build_robot import build
+from .cad_pick_place import FingerMap, robot_base_offset
+from .paths import CONFIG_FILE
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG = os.path.join(BASE_DIR, 'sim_config.json')
+CONFIG = CONFIG_FILE
 BIG_HOLE_ORIGIN = (-0.1004, -0.3402)   # big hole (0, 0) in the sim world frame (m), as show_locations.py
 BIG_HOLE_PITCH = 0.040
 
@@ -54,7 +53,7 @@ def fingertip(model, data):
 def close_gripper(gcfg):
     """Closes the real gripper fully (step 1). Moves only the fingers."""
     import time
-    from real_gripper import RealGripper
+    from .real_gripper import RealGripper
     g = RealGripper(gcfg.get('port', '/dev/ttyUSB0'), int(gcfg.get('baud', 115200)), int(gcfg.get('slave', 9)))
     try:
         if not g.activated():
@@ -79,7 +78,7 @@ def main():
     ap.add_argument('--joints', nargs=6, type=float, help='joint angles in degrees instead of reading the robot')
     ap.add_argument('--write', action='store_true', help='save the corrected robot_base_offset_mm')
     ap.add_argument('--close-gripper', action='store_true',
-                    help='only close the real 2F-85 fully (sim_config.json real_gripper port) and exit')
+                    help='only close the real 2F-85 fully (config/cell.json real_gripper port) and exit')
     args = ap.parse_args()
 
     cfg = json.load(open(CONFIG))
@@ -93,7 +92,7 @@ def main():
     if args.joints:
         deg = np.array(args.joints)
     else:
-        from real_robot import connect
+        from .real_robot import connect
         robot = connect(args.ip, args.src)
         deg = np.array(robot.joints())
         print('Robot joints (deg): ' + ' '.join(f'{v:8.2f}' for v in deg) + f'   mode {robot.mode()}')
@@ -136,13 +135,13 @@ def main():
         line = f'"{robot_id}": [{new[0]:.1f}, {new[1]:.1f}, {new[2]:.1f}]'
         key = f'"{robot_id}": {old}'
         if key not in s:
-            print(f'Could not find {key} in sim_config.json; set robot_base_offset_mm.{robot_id} by hand.')
+            print(f'Could not find {key} in config/cell.json; set robot_base_offset_mm.{robot_id} by hand.')
             return 2
         start = s.index('"robot_base_offset_mm"')
         k = s.index(key, start)
         s = s[:k] + line + s[k + len(key):]
         open(CONFIG, 'w').write(s)
-        print('Saved to sim_config.json. Re-plan in the web app (Plan to Points) before Sim / Real Sim.')
+        print('Saved to config/cell.json. Re-plan in the web app (Plan to Points) before Sim / Real Sim.')
     else:
         print('Add --write to save it (then re-plan in the web app).')
     return 0

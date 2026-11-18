@@ -1,6 +1,6 @@
 /**
  * What two marked points mean for the gripper, worked out instantly in the browser so it can be drawn as
- * soon as the second point is marked. Same rules as classify_points in jenga_mujoco/grasp_planner.py, which
+ * soon as the second point is marked. Same rules as classify_points in cell/grasp_planner.py, which
  * has the final say: change them together.
  */
 import * as THREE from 'three';

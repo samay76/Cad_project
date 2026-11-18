@@ -14,8 +14,8 @@ i.e. at z = MOUNT_PLATE_TOP_Z (build_robot.py raises the arm by that much).
 Physics uses simple boxes (table top, mounting plate, pendant). The STEP mesh is visual only: a convex
 collision hull of a whole cabinet would fill the space under the top.
 
-The STEP is triangulated once (~15 s, needs OCP like step_to_mesh.py) and cached in assets/table_base/.
-  python table_base.py            # (re)build the cache
+The STEP is triangulated once (~15 s, needs OCP like step_to_mesh.py) and cached in var/cache/table_base/.
+  python -m cell.table_base            # (re)build the cache
 """
 import glob
 import hashlib
@@ -25,11 +25,11 @@ import sys
 
 import mujoco
 import numpy as np
+from .paths import CACHE, MODELS
 
 G = mujoco.mjtGeom
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TABLE_STEP = os.path.join(BASE_DIR, '..', 'Table_base.step')
-CACHE_DIR = os.path.join(BASE_DIR, 'assets', 'table_base')
+TABLE_STEP = os.path.join(MODELS, 'Table_base.step')
+CACHE_DIR = os.path.join(CACHE, 'table_base')
 CONVERTER_VERSION = 1
 
 # Measured from Table_base.step (mm, CAD frame, Y up)
@@ -73,7 +73,7 @@ def convert(step_path=TABLE_STEP, out_dir=CACHE_DIR):
     from OCP.BRepBndLib import BRepBndLib
     from OCP.TopAbs import TopAbs_SHELL
     from OCP.TopExp import TopExp_Explorer
-    from step_to_mesh import read_step, triangulate
+    from .step_to_mesh import read_step, triangulate
 
     shape = read_step(step_path)
     verts, faces, offset = [], [], 0

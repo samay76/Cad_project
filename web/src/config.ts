@@ -76,7 +76,7 @@ export const GRIPPERS: Record<GripperId, GripperSpec> = {
   },
 };
 
-/** The cell's robot arm (jenga_mujoco/robots.py). */
+/** The cell's robot arm (cell/robots.py). */
 export type RobotId = 'ec66';
 export const ROBOT_ID: RobotId = 'ec66';
 export const GRIPPER_ID: GripperId = '2f85';
