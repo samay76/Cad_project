@@ -4,7 +4,7 @@
  * Real Sim (cell/real_robot.py) moves the real EC66 through the planned joints; it is enabled only once the
  * Sim of the same plan and grasp has run to the end.
  * Grasp and motion planning happen in Python (cell/auto_pick_place.py), reached through the
- * dev-server bridge. This class keeps the workflow state and connects the panel, viewer and bridge.
+ * cell server (python -m server). This class keeps the workflow state and connects the panel, viewer and server.
  */
 import * as THREE from 'three';
 import type { GraspController } from '../gripper/GraspController';
@@ -354,7 +354,7 @@ export class AutoPickController {
         await this.showSelected();
       });
     } catch (err: any) {
-      this.fail(`Could not start the planner: ${err?.message || err}. Is the app running via "npm run dev"?`);
+      this.fail(`Could not start the planner: ${err?.message || err}. Is the cell server running (python -m server)?`);
     }
   }
 
@@ -537,7 +537,7 @@ export class AutoPickController {
       try {
         st = await fetchStatus(runId);
       } catch {
-        return; // dev server restarting; keep polling
+        return; // server restarting; keep polling
       }
       if (this.pollTimer === null) return; // stopped while the request was in flight
       onUpdate?.(st);
@@ -550,7 +550,7 @@ export class AutoPickController {
       }
       this.stopPolling();
       this.processRunning = false;
-      onEnd(!!st.ok, st.message || 'The simulator ended without a message (see the terminal running npm run dev).', st);
+      onEnd(!!st.ok, st.message || 'The simulator ended without a message (see the run log in var/runs/<run>/log.txt).', st);
     }, POLL_MS);
   }
 

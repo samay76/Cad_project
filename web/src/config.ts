@@ -3,7 +3,7 @@
  */
 
 export const GRIPPER_CONFIG = {
-  // Served URL path in Vite dev server
+  // URL path the gripper URDF is served from (web/public/gripper)
   baseUrl: '/gripper/',
 
   // URDF specification file
