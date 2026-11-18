@@ -370,10 +370,8 @@ export class CollisionChecker {
     cadPartsRoot: THREE.Group | null
   ): { hasCollision: boolean } {
     if (!cadPartsRoot) return { hasCollision: false };
-    const tEnsureStart = performance.now();
     const mergedGeom = this.ensureBVH(cadPartsRoot);
     const cadBvh: MeshBVH | undefined = (mergedGeom as any)?.boundsTree;
-    const tEnsure = performance.now() - tEnsureStart;
     if (!cadBvh) return { hasCollision: false };
 
     this._invWorldPart.copy(cadPartsRoot.matrixWorld).invert();

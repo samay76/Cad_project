@@ -17,7 +17,6 @@ export class PerformanceHUD {
   private maxFrameSamples = 30;
 
   // Collision timing
-  private lastCollisionDuration = 0;
   private maxAllowedColTimeMs = 8.0;
 
   private boundKeyDown: (e: KeyboardEvent) => void;
@@ -97,7 +96,6 @@ export class PerformanceHUD {
    * Records collision check duration and warns if > 8ms
    */
   public recordCollisionTime(durationMs: number) {
-    this.lastCollisionDuration = durationMs;
 
     if (this.colElement && this.isVisible) {
       this.colElement.textContent = `${durationMs.toFixed(2)} ms`;

@@ -19,7 +19,6 @@ export class AppLayout {
   public topBarContainer!: HTMLElement;
   public autoPickContainer!: HTMLElement;
   public partsListContainer!: HTMLElement;
-  public graspListContainer!: HTMLElement;
   public viewportContainer!: HTMLElement;
   public gripperPanelContainer!: HTMLElement;
   public partPanelContainer!: HTMLElement;
@@ -144,7 +143,6 @@ export class AppLayout {
           <aside class="sidebar-left" id="left-sidebar-container">
             <div id="auto-pick-mount"></div>
             <div id="parts-list-mount"></div>
-            <div id="grasps-list-mount"></div>
           </aside>
 
           <!-- 3D VIEWPORT CENTER (Takes remaining space) -->
@@ -265,7 +263,6 @@ export class AppLayout {
     this.topBarContainer = this.root.querySelector('#top-bar-container')!;
     this.autoPickContainer = this.root.querySelector('#auto-pick-mount')!;
     this.partsListContainer = this.root.querySelector('#parts-list-mount')!;
-    this.graspListContainer = this.root.querySelector('#grasps-list-mount')!;
     this.viewportContainer = this.root.querySelector('#viewport-container')!;
     this.gripperPanelContainer = this.root.querySelector('#gripper-panel-mount')!;
     this.partPanelContainer = this.root.querySelector('#part-panel-mount')!;

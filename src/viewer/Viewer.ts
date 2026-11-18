@@ -21,7 +21,6 @@ export class Viewer {
   private modelRoot: THREE.Group | null = null;
   private selectionManager: SelectionManager;
   private currentMetadata: CADModelMetadata | null = null;
-  private currentParts: PartInfo[] = [];
 
   // State
   private isWireframe = false;
@@ -36,7 +35,6 @@ export class Viewer {
   private perfHUD: PerformanceHUD;
 
   // Mini orientation gizmo
-  private gizmoCanvas: HTMLCanvasElement;
   private gizmoRenderer: THREE.WebGLRenderer;
   private gizmoScene: THREE.Scene;
   private gizmoCamera: THREE.PerspectiveCamera;
@@ -97,8 +95,7 @@ export class Viewer {
     this.setupHelpers(200);
 
     // Setup Orientation Gizmo in corner
-    const { gizmoCanvas, gizmoRenderer, gizmoScene, gizmoCamera } = this.setupGizmo();
-    this.gizmoCanvas = gizmoCanvas;
+    const { gizmoRenderer, gizmoScene, gizmoCamera } = this.setupGizmo();
     this.gizmoRenderer = gizmoRenderer;
     this.gizmoScene = gizmoScene;
     this.gizmoCamera = gizmoCamera;
@@ -363,7 +360,6 @@ export class Viewer {
       this.scene.add(this.modelRoot);
 
       this.currentMetadata = result.metadata;
-      this.currentParts = result.parts;
 
       // Adjust helpers based on model bounding box
       const box = result.metadata.boundingBox;

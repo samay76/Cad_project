@@ -13,8 +13,7 @@ import type {
   GripperState,
   TestPhase,
   ContactStatusType,
-  ContactPoints,
-  Vector3D
+  ContactPoints
 } from '../types';
 
 export type GripperStateCallback = (state: GripperState) => void;

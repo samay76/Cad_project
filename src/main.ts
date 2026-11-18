@@ -5,14 +5,12 @@ import { PartsListView } from './ui/PartsList';
 import { PropertiesPanel } from './ui/PropertiesPanel';
 import { GripperPanel } from './ui/GripperPanel';
 import { PartPanel } from './ui/PartPanel';
-import { GraspListView } from './ui/GraspList';
 import { AutoPickPanel } from './ui/AutoPickPanel';
 import { GripperLoader } from './gripper/GripperLoader';
 import { GraspController } from './gripper/GraspController';
 import { PartController } from './part/PartController';
-import { AutoPickController, SIM_PART_FILE } from './autopick/AutoPickController';
+import { AutoPickController } from './autopick/AutoPickController';
 import { FixtureView } from './autopick/FixtureView';
-import { arrayBufferToBase64 } from './autopick/api';
 import type { SavedGrasp, ClickedPointInfo, GripperState } from './types';
 import {
   GRIPPERS,
@@ -36,7 +34,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   let propertiesPanel: PropertiesPanel | null = null;
   let gripperPanel: GripperPanel | null = null;
   let partPanel: PartPanel | null = null;
-  let graspList: GraspListView | null = null;
   let graspController: GraspController | null = null;
   let partController: PartController | null = null;
   let autoPick: AutoPickController | null = null;
@@ -46,35 +43,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   let lastClickedPoint: ClickedPointInfo | null = null;
   let currentModelName = 'model.step';
   let currentModelBuffer: ArrayBuffer | null = null;
-  let savedGrasps: SavedGrasp[] = [];
   let activeGripperId: GripperId = getStoredGripperId();
   applyGripperSpec(GRIPPERS[activeGripperId]);
   let activeRobotId = getStoredRobotId();
-
-  // Persistence helpers
-  const STORAGE_KEY = 'nferent_cad_saved_grasps';
-  const loadGraspsFromStorage = (): SavedGrasp[] => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch {
-      // ignore storage errors
-    }
-    return [];
-  };
-
-  const saveGraspsToStorage = () => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(savedGrasps));
-    } catch {
-      // ignore storage errors
-    }
-  };
-
-  savedGrasps = loadGraspsFromStorage();
 
   // Helper to load CAD geometry safely
   const loadCADBuffer = async (buffer: ArrayBuffer, fileName: string) => {
@@ -116,39 +87,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       lastClickedPoint.worldPoint,
       lastClickedPoint.worldNormal
     );
-  };
-
-  // Helper to save current grasp pose
-  const saveCurrentGrasp = () => {
-    if (!graspController) {
-      layout?.showError('Please load the gripper before saving a grasp pose.');
-      return;
-    }
-    const state = graspController.getCurrentState();
-    const count = savedGrasps.length + 1;
-    const newGrasp: SavedGrasp = {
-      id: `grasp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      name: `Grasp Pose ${count}`,
-      tcpPose: state.relativePose, // Stored as T_part_grasp relative to CAD part frame
-      rpy: state.relativeRpy,
-      openingWidth: state.openingWidth,
-      measuredGraspWidth: state.measuredGraspWidth,
-      contactPoints: graspController.getContactPointsPart(),
-      standoff: state.standoff,
-      depth: state.depth,
-      approachAxis: { x: 0, y: 0, z: 1 },
-      closingAxis: { x: 1, y: 0, z: 0 },
-      preGraspDistance: state.preGraspDistance,
-      tcpOffset: state.tcpOffset,
-      createdAt: Date.now(),
-      partName: currentModelName,
-      gripperId: activeGripperId
-    };
-
-    savedGrasps.push(newGrasp);
-    saveGraspsToStorage();
-    graspList?.setGrasps(savedGrasps);
-    graspList?.setSelectedGraspId(newGrasp.id);
   };
 
   // Helper to restore grasp (places gripper at T_world_part * T_part_grasp)
@@ -206,139 +144,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       layout?.showError(err?.message || `Failed to load ${spec.label}.`, 'Gripper');
     } finally {
       switchingGripper = false;
-    }
-  };
-
-  // Helper to export grasps as JSON
-  const exportGraspsJSON = () => {
-    if (savedGrasps.length === 0) {
-      layout?.showError('No grasps to export.');
-      return;
-    }
-    const jsonStr = JSON.stringify(savedGrasps, null, 2);
-    const blob = new Blob([jsonStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    const safeModelName = currentModelName.replace(/[^a-zA-Z0-9_-]/g, '_');
-    a.href = url;
-    a.download = `grasps_${safeModelName}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  // ---- MuJoCo simulation bridge (served by the Vite plugin in vite.config.ts) ----
-  let simPollTimer: number | null = null;
-
-  const pollSimulation = (runId: string) => {
-    if (simPollTimer !== null) window.clearInterval(simPollTimer);
-    let lastPhase = '';
-    simPollTimer = window.setInterval(async () => {
-      try {
-        const resp = await fetch(`/api/mujoco/status?id=${encodeURIComponent(runId)}`);
-        const st = await resp.json();
-        if (st.phase && st.phase !== lastPhase && st.state === 'running') {
-          lastPhase = st.phase;
-          layout?.showInfo('MuJoCo simulation', st.message || st.phase);
-        }
-        if (st.state !== 'running') {
-          window.clearInterval(simPollTimer!);
-          simPollTimer = null;
-          if (st.ok) {
-            layout?.showInfo('MuJoCo simulation finished', '');
-          } else {
-            layout?.showError(st.message || 'Simulation failed (see terminal running npm run dev).', 'MuJoCo simulation failed');
-          }
-        }
-      } catch {
-        // dev server restarting; keep polling
-      }
-    }, 1000);
-  };
-
-  const simulateGraspInMujoco = async (grasp: SavedGrasp) => {
-    if (!currentModelBuffer || !viewer?.getModelRoot()) {
-      layout?.showError('Load the CAD part first.', 'MuJoCo simulation');
-      return;
-    }
-    if (!SIM_PART_FILE.test(currentModelName)) {
-      layout?.showError('MuJoCo simulation supports STEP (.step/.stp) and mesh (.stl/.obj, mm) parts.', 'MuJoCo simulation');
-      return;
-    }
-    if (grasp.partName && grasp.partName !== currentModelName) {
-      layout?.showError(
-        `This grasp was taught on "${grasp.partName}" but "${currentModelName}" is loaded.`,
-        'MuJoCo simulation'
-      );
-      return;
-    }
-
-    // T_world_part as shown in the viewer: MuJoCo places the part on the table in this same orientation.
-    const root = viewer.getModelRoot()!;
-    root.updateMatrixWorld(true);
-    const pos = new THREE.Vector3();
-    const quat = new THREE.Quaternion();
-    root.matrixWorld.decompose(pos, quat, new THREE.Vector3());
-
-    layout?.showInfo(
-      'MuJoCo simulation',
-      `Starting simulator: ${ROBOTS[activeRobotId].label} + ${GRIPPERS[grasp.gripperId ?? '2f85'].label} (first run converts the part's mesh, ~30 s)...`
-    );
-    try {
-      const resp = await fetch('/api/mujoco/simulate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          grasp,
-          robotId: activeRobotId,
-          partFileName: currentModelName,
-          partFileBase64: arrayBufferToBase64(currentModelBuffer),
-          partWorldPose: {
-            position: { x: pos.x, y: pos.y, z: pos.z },
-            orientation: { x: quat.x, y: quat.y, z: quat.z, w: quat.w }
-          }
-        })
-      });
-      const res = await resp.json();
-      if (!resp.ok || !res.ok) throw new Error(res.message || `HTTP ${resp.status}`);
-      pollSimulation(res.runId);
-    } catch (err: any) {
-      layout?.showError(
-        `Could not start MuJoCo: ${err?.message || err}. Is the app running via "npm run dev"?`,
-        'MuJoCo simulation failed'
-      );
-    }
-  };
-
-  // Helper to import grasps from JSON
-  const importGraspsJSON = (imported: SavedGrasp[]) => {
-    if (!Array.isArray(imported) || imported.length === 0) {
-      layout?.showError('Imported file does not contain valid grasp poses.');
-      return;
-    }
-    const valid = imported
-      .filter((g) => g && g.tcpPose && g.tcpPose.position && g.tcpPose.orientation)
-      .map((g) => ({
-        ...g,
-        standoff: g.standoff ?? 0,
-        depth: g.depth ?? 15,
-        approachAxis: g.approachAxis ?? { x: 0, y: 0, z: 1 },
-        closingAxis: g.closingAxis ?? { x: 1, y: 0, z: 0 },
-        tcpOffset: g.tcpOffset ?? 145,
-        preGraspDistance: g.preGraspDistance ?? 100
-      }));
-
-    if (valid.length === 0) {
-      layout?.showError('No valid grasp poses found in imported file.');
-      return;
-    }
-    savedGrasps = [...savedGrasps, ...valid];
-    saveGraspsToStorage();
-    graspList?.setGrasps(savedGrasps);
-    if (valid[0] && graspController) {
-      restoreGrasp(valid[0]);
-      graspList?.setSelectedGraspId(valid[0].id);
     }
   };
 
@@ -434,14 +239,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       graspController?.evaluateCollisionState();
     },
     onBakePartOrigin: () => {
-      partController?.bakeCurrentOrientationAsOrigin(
-        () => {
-          // Warning confirmed: saved grasps invalidated
-          savedGrasps = [];
-          saveGraspsToStorage();
-          graspList?.setGrasps(savedGrasps);
-        }
-      );
+      partController?.bakeCurrentOrientationAsOrigin(() => autoPick?.clearPoints());
     },
     onTargetToggle: (target) => {
       graspController?.setActiveEditTarget(target);
@@ -497,9 +295,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     onResetPose: () => {
       graspController?.resetGripperPose();
     },
-    onSaveGrasp: () => {
-      saveCurrentGrasp();
-    },
     onCloseUntilContact: (tol) => {
       graspController?.closeUntilContact(tol);
     },
@@ -526,36 +321,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       graspController?.setTolerance(t);
     }
   });
-
-  // 8. Initialize Grasps List in left sidebar
-  graspList = new GraspListView(layout.graspListContainer, {
-    onRestoreGrasp: (grasp) => {
-      restoreGrasp(grasp);
-    },
-    onRenameGrasp: (id, newName) => {
-      const g = savedGrasps.find((item) => item.id === id);
-      if (g) {
-        g.name = newName;
-        saveGraspsToStorage();
-        graspList?.setGrasps(savedGrasps);
-      }
-    },
-    onDeleteGrasp: (id) => {
-      savedGrasps = savedGrasps.filter((item) => item.id !== id);
-      saveGraspsToStorage();
-      graspList?.setGrasps(savedGrasps);
-    },
-    onExportJSON: () => {
-      exportGraspsJSON();
-    },
-    onImportJSON: (imported) => {
-      importGraspsJSON(imported);
-    },
-    onSimulateGrasp: (grasp) => {
-      simulateGraspInMujoco(grasp);
-    }
-  });
-  graspList.setGrasps(savedGrasps);
 
   // Helper to load gripper model
   const loadGripperModel = async () => {

@@ -1,4 +1,4 @@
-import type { CADModelMetadata, ClickedPointInfo, SelectionState } from '../types';
+import type { CADModelMetadata, SelectionState } from '../types';
 
 export class PropertiesPanel {
   private container: HTMLElement;

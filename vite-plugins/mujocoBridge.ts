@@ -1,17 +1,9 @@
 /**
  * MuJoCo bridge (dev server only).
  *
- * POST /api/mujoco/simulate  { grasp, robotId, partFileName, partFileBase64, partWorldPose }
- *   -> writes jenga_mujoco/runs/<runId>/{part.stp, request.json}
- *   -> spawns `python jenga_mujoco/cad_pick_place.py --request ... --status ...`
- *      which opens a MuJoCo viewer window on this machine's display.
  * GET  /api/mujoco/status?id=<runId>
  *   -> contents of status.json written by the Python process
  *      ({ state: 'running' | 'done' | 'failed', phase, message, ok }).
- *
- * GET  /api/mujoco/file?id=<runId>&name=<file.jpg|png>
- *   -> an image written by the simulator into the run folder: feed.jpg (live inspection camera,
- *      refreshed ~7x per second) and inspect_XX.png (inspection stills).
  *
  * Automatic pick & place (jenga_mujoco/auto_pick_place.py):
  * POST /api/mujoco/auto/plan  { partFileName, partFileBase64, partWorldPose, robotId, gripperId, tcpOffset,
@@ -69,7 +61,6 @@ function readBody(req: IncomingMessage): Promise<string> {
 export function mujocoBridgePlugin(): Plugin {
   const simDir = path.resolve(process.cwd(), 'jenga_mujoco');
   const runsDir = path.join(simDir, 'runs');
-  const script = path.join(simDir, 'cad_pick_place.py');
   const autoScript = path.join(simDir, 'auto_pick_place.py');
   const python =
     process.env.MUJOCO_PYTHON || path.join(os.homedir(), 'miniforge3/envs/mujoco_cad/bin/python');
@@ -135,42 +126,6 @@ export function mujocoBridgePlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url || '/', 'http://localhost');
-
-        if (url.pathname === '/api/mujoco/simulate' && req.method === 'POST') {
-          try {
-            if (!fs.existsSync(python)) return sendJson(res, 500, { ok: false, message: pythonMissing() });
-            const body = JSON.parse(await readBody(req));
-            if (!body?.grasp?.tcpPose || !body?.partFileBase64 || !body?.partFileName) {
-              return sendJson(res, 400, { ok: false, message: 'Missing grasp or part file in request.' });
-            }
-
-            const robotId = body.robotId ?? 'cs66';
-            if (typeof robotId !== 'string' || !/^[a-z0-9_]+$/.test(robotId)) {
-              return sendJson(res, 400, { ok: false, message: 'Invalid robotId.' });
-            }
-
-            const { runId, runDir, partPath } = newRunDir(String(body.partFileName), body.partFileBase64);
-            const requestPath = path.join(runDir, 'request.json');
-            fs.writeFileSync(
-              requestPath,
-              JSON.stringify(
-                {
-                  partFile: partPath,
-                  partFileName: body.partFileName,
-                  partWorldPose: body.partWorldPose ?? null,
-                  robotId,
-                  grasp: body.grasp
-                },
-                null,
-                2
-              )
-            );
-            launch(runId, runDir, script, ['--request', requestPath]);
-            return sendJson(res, 200, { ok: true, runId });
-          } catch (err: any) {
-            return sendJson(res, 500, { ok: false, message: err?.message || String(err) });
-          }
-        }
 
         if (url.pathname === '/api/mujoco/auto/plan' && req.method === 'POST') {
           try {
@@ -328,26 +283,6 @@ export function mujocoBridgePlugin(): Plugin {
             });
           } catch (err: any) {
             return sendJson(res, 200, { ok: true, fixture: null, message: err?.message || String(err) });
-          }
-        }
-
-        if (url.pathname === '/api/mujoco/file' && req.method === 'GET') {
-          const id = url.searchParams.get('id') || '';
-          const name = url.searchParams.get('name') || '';
-          if (!/^[\w-]+$/.test(id) || !/^[\w-]+\.(jpg|png)$/.test(name)) {
-            res.writeHead(400);
-            return res.end('Bad request');
-          }
-          try {
-            const data = fs.readFileSync(path.join(runsDir, id, name));
-            res.writeHead(200, {
-              'Content-Type': name.endsWith('.png') ? 'image/png' : 'image/jpeg',
-              'Cache-Control': 'no-store'
-            });
-            return res.end(data);
-          } catch {
-            res.writeHead(404);
-            return res.end('Not found');
           }
         }
 

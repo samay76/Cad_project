@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import type { GripperModel } from './GripperModel';
-import { CollisionChecker, type DetailedCollisionResult } from './collision';
+import { CollisionChecker } from './collision';
 import { PoseMath } from '../math/poses';
-import type { ContactPoints, Vector3D } from '../types';
+import type { ContactPoints } from '../types';
 import { GRIPPER_CONFIG } from '../config';
 
 export interface CloseUntilContactResult {
@@ -81,8 +81,6 @@ export class ContactGrip {
     let openWidth = initialOpening;
     let closedWidth = GRIPPER_CONFIG.minOpeningWidth; // 0.0 mm
 
-    let lastSafeState = initialState;
-    let finalState = initialState;
 
     // 10 binary search iterations achieve 85 / 1024 ~ 0.08 mm precision in ~0.2 ms
     const iterations = 10;
@@ -95,11 +93,9 @@ export class ContactGrip {
       if (state.hasCollision || state.isContact) {
         // Touched or penetrated -> safe boundary is more open
         closedWidth = midWidth;
-        finalState = state;
       } else {
         // Clear -> can close further
         openWidth = midWidth;
-        lastSafeState = state;
       }
     }
 

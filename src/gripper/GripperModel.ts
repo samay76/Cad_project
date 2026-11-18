@@ -41,7 +41,6 @@ export class GripperModel {
 
   // Reusable scratch objects
   private _scratchBox = new THREE.Box3();
-  private _scratchVec = new THREE.Vector3();
 
   constructor(robot: URDFRobot, spec: GripperSpec) {
     this.spec = spec;
