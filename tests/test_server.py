@@ -129,3 +129,19 @@ def test_old_runs_are_pruned(settings):
         time.sleep(0.002)
     left = sorted(os.listdir(s.runs_dir))
     assert left == sorted(ids)[-3:]
+
+
+def test_live_view_endpoints(client, settings):
+    jobs_dir = os.path.join(settings.data_dir, 'runs', 'r1')
+    os.makedirs(jobs_dir)
+    assert client.get('/api/mujoco/view/scene?id=r1').status_code == 404       # job not started yet
+    with open(os.path.join(jobs_dir, 'scene.json'), 'w') as f:
+        json.dump({'frameFloats': 3, 'bodies': [], 'geoms': []}, f)
+    with open(os.path.join(jobs_dir, 'frames.bin'), 'wb') as f:
+        f.write(bytes(range(4 * 3 * 2 + 5)))                                    # 2 whole frames + a partial one
+    assert client.get('/api/mujoco/view/scene?id=r1').json()['frameFloats'] == 3
+    assert len(client.get('/api/mujoco/view/frames?id=r1&from=0').content) == 24
+    assert len(client.get('/api/mujoco/view/frames?id=r1&from=1').content) == 12
+    assert client.get('/api/mujoco/view/frames?id=../x').status_code == 400
+    assert client.get('/api/mujoco/view/mesh/../../etc').status_code in (400, 404)
+    assert client.get('/api/mujoco/view/mesh/' + '0' * 32).status_code == 404

@@ -458,6 +458,8 @@ def run_on_real_robot(sim, doc, plan, ip, src=None, speed=REAL_SPEED_DEFAULT, go
                 int(gripper_cfg.get('slave', 9)))
             st.info['real_gripper'] = {'port': gripper_cfg.get('port'), 'fake': fake}
 
+        t_view0 = time.time()
+
         def mirror(deg):
             d.qpos[:N_ARM] = np.radians(deg)
             if gripper is not None:
@@ -468,6 +470,8 @@ def run_on_real_robot(sim, doc, plan, ip, src=None, speed=REAL_SPEED_DEFAULT, go
                 sim._set_part_qpos(site_T(m, d, TCP_SITE) @ T_tcp_part)
             d.qvel[:] = 0
             mujoco.mj_forward(m, d)
+            if sim.web is not None:
+                sim.web.frame(d, time.time() - t_view0)
             if sim.viewer is not None:
                 if not sim.viewer.is_running():
                     stop_requested['why'] = 'The MuJoCo window was closed.'

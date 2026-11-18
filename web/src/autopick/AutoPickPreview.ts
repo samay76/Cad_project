@@ -55,6 +55,12 @@ export class AutoPickPreview {
     scene.add(this.markers);
   }
 
+  /** Shows or hides the plan drawing (path, gripper ghost); the marked points stay. */
+  public setVisible(visible: boolean) {
+    this.group.visible = visible;
+    this.requestRender();
+  }
+
   /** Marks where each finger should go, visible even through the gripper. */
   public setPoints(points: MarkedPoint[], partRoot: THREE.Object3D | null, cue: GripCue | null = null) {
     this.markers.traverse((obj) => {

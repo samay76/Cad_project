@@ -236,6 +236,12 @@ export class GraspController {
     return this.transformControls.getMode() as 'translate' | 'rotate';
   }
 
+  /** Shows or hides the gripper and its gizmo (hidden while the live cell is shown). */
+  public setVisible(visible: boolean) {
+    this.gripperModel.root.visible = visible;
+    this.setTransformVisible(visible);
+  }
+
   public setTransformVisible(visible: boolean) {
     this.transformControls.getHelper().visible = visible;
     this.transformControls.enabled = visible;

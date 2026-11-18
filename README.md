@@ -5,8 +5,9 @@ fixture on the table.
 
 1. **Teach**: load a part's STEP file in the browser. It is shown seated on the pick fixture. Mark the two points the
    fingers should grip; optionally adjust the gripper with Step Jogging or the Pick Offset.
-2. **Simulate**: plan the motion and run it in MuJoCo with physics (the window opens on the cell PC).
-3. **Run on the real robot**: Real Sim drives the real EC66 and 2F-85 through the same joints, mirrored live in MuJoCo.
+2. **Simulate**: plan the motion and run it in MuJoCo with physics, watched live in the browser.
+3. **Run on the real robot**: Real Sim drives the real EC66 and 2F-85 through the same joints, shown live in the
+   browser from the real robot's joints.
 
 ```
 web/        browser app (TypeScript, Three.js, Vite)        -> built to web/dist, served by the server
@@ -67,10 +68,21 @@ In the **Auto Pick & Place** panel (left):
 3. **Plan to Points**: up to three solutions, best first. Click one to show it.
    **Step Jogging** (Gripper tab) or **Pick Offset** after planning, then Plan again: the arm plans to exactly that
    gripper pose, or the app says why it can't.
-4. **Preview Here** / **Preview Robot** (MuJoCo, no physics), then **Sim** (full physics). Sim reports how close each
+4. **Preview Here** / **Preview Robot** (no physics), then **Sim** (full physics). Sim reports how close each
    finger came to its point. Running Sim to the end enables **Real Sim** for that plan.
-5. **Go Home (real robot)**, then **Real Sim**. **Stop** (or closing the MuJoCo window) sends `stop` to the robot.
-   Keep a hand on the E-stop.
+5. **Go Home (real robot)**, then **Real Sim**. **Stop** sends `stop` to the robot. Keep a hand on the E-stop.
+
+### Live view
+
+Preview Robot, Sim, Real Sim and Go Home are shown **live in the 3D view**: the same table, fixture, tray, EC66,
+2F-85 and part that MuJoCo simulates, moving as the job runs (Real Sim: as the real robot reports its joints). The
+teaching part, fixture and gripper are hidden meanwhile; the box at the bottom left shows the live step and the
+result, and **Back to teaching** returns to marking points (Plan to Points or Clear Points also do).
+
+How it works: the job writes the scene once (`var/runs/<id>/scene.json`, meshes in `var/cache/webview/`, which the
+browser caches) and appends the moving bodies' poses ~30 times a second (`frames.bin`); the page polls them and plays
+them ~0.15 s behind, interpolated (`cell/web_view.py`, `web/src/autopick/LiveView.ts`).
+`web_view` in `config/cell.json`: `mujoco_window: true` also opens the MuJoCo window on the cell PC.
 
 ### Grasp test or full pick & place
 
@@ -128,6 +140,7 @@ The server checks `config/cell.json` at start-up (`cell/config_check.py`) and do
 - `cell/auto_pick_place.py`: the job entry point (`--mode plan|preview|execute|real|home`), grasp from the two points
   (`grasp_planner.py`, `gripper_geometry.py`), motion (`ik.py`, `motion_planner.py`: straight TCP lines and
   RRT-Connect), collision checks against the physics shapes (`collision_check.py`).
+- `cell/web_view.py`: the live view stream (scene + body poses) for the web app.
 - `cell/real_robot.py`, `cell/real_gripper.py`: the EC66 client, waypoint reduction, safety checks, the 2F-85 on
   Modbus RTU.
 - Frames (`cell/frames.py`): the web tool and MuJoCo use the same part frame (STEP native, mm in the web, m in MuJoCo)

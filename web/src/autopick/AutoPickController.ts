@@ -12,6 +12,7 @@ import type { AutoPickPanel, AutoPickView } from '../ui/AutoPickPanel';
 import type { ClickedPointInfo, Pose, SavedGrasp } from '../types';
 import type { Viewer } from '../viewer/Viewer';
 import { GRIPPERS, type GripperId } from '../config';
+import { LiveView } from './LiveView';
 import { AutoPickPreview, gripWidth, POINT_COLORS } from './AutoPickPreview';
 import {
   arrayBufferToBase64,
@@ -87,12 +88,14 @@ export class AutoPickController {
   /** `${runId}:${candidate}` whose Sim ran to the end: Real Sim is allowed for exactly that plan and grasp. */
   private simChecked: string | null = null;
   private processRunning = false;
+  private live: LiveView; // Sim / Real Sim shown live in the 3D view
 
   constructor(
     private panel: AutoPickPanel,
     private deps: AutoPickDeps
   ) {
     this.preview = new AutoPickPreview(deps.viewer.getScene(), () => deps.viewer.requestRender());
+    this.live = new LiveView(deps.viewer, (hide) => this.hideTeaching(hide));
     panel.setEvents({
       onCalculate: () => this.calculate(),
       onClearPoints: () => this.clearPoints(),
@@ -107,6 +110,17 @@ export class AutoPickController {
       onPickOffset: (offset) => this.setPickOffset(offset)
     });
     this.refresh();
+  }
+
+  /** While the live cell is shown: the teaching part, fixture, gripper and plan drawing are hidden. */
+  private hideTeaching(hide: boolean) {
+    const root = this.deps.viewer.getModelRoot();
+    if (root) root.visible = !hide;
+    const fixture = this.deps.viewer.getScene().getObjectByName('pick_fixture');
+    if (fixture) fixture.visible = !hide;
+    this.deps.getGraspController()?.setVisible(!hide);
+    this.preview.setVisible(!hide);
+    this.deps.viewer.requestRender();
   }
 
   /** The part, gripper or robot changed: a plan made for the old one no longer applies. */
@@ -138,6 +152,7 @@ export class AutoPickController {
 
   /** A click on the part marks the next finger's point. A click after both are set starts over. */
   public markPoint(click: ClickedPointInfo) {
+    if (this.live.active) return; // clicks in the live cell do not mark points
     if (!click.fromSurfaceClick || this.busy || this.preview.playing) return;
     if (this.points.length === 2) this.points = [];
     this.points.push({ point: click.point, normal: click.normal });
@@ -146,6 +161,7 @@ export class AutoPickController {
   }
 
   public clearPoints() {
+    this.live.close();
     this.points = [];
     this.resetOffset();
     this.invalidate();
@@ -279,6 +295,7 @@ export class AutoPickController {
 
   // ---------------- calculate ----------------
   private async calculate() {
+    this.live.close(); // back to teaching: the new plan is shown on the part
     const { name, buffer } = this.deps.getPart();
     const root = this.partRoot();
     const grasp = this.deps.getGraspController();
@@ -410,6 +427,7 @@ export class AutoPickController {
   }
 
   private togglePreviewHere() {
+    this.live.close();
     if (this.preview.playing) {
       this.preview.stop();
       this.refresh();
@@ -438,15 +456,18 @@ export class AutoPickController {
       const key = this.simKey();
       const runId = await startRun(this.runId, this.selected, mode);
       this.processRunning = true;
+      this.live.start(runId, mode === 'preview' ? 'Preview: planned motion, no physics' : 'Sim: MuJoCo physics');
       this.watch(
         runId,
         (ok, message, st) => {
           this.busy = false;
+          this.live.finish(ok, message);
           // The whole motion was played (even if the part missed the tray): the user has checked it.
           if (mode === 'execute' && st?.state === 'done' && key === this.simKey()) this.simChecked = key;
           if (ok) this.setStatus(message + (this.simChecked === key ? ' Real Sim is now enabled.' : ''), 'ok');
           else this.fail(message);
-        }
+        },
+        (st) => st.state === 'running' && st.message && this.live.setMessage(st.message)
       );
     } catch (err: any) {
       this.fail(`Could not start MuJoCo: ${err?.message || err}.`);
@@ -471,7 +492,7 @@ export class AutoPickController {
               ? `- The REAL gripper (USB) closes at the grasp and opens at the drop; if it is not activated, ` +
                 `it first closes and opens once. Keep clear of the jaws.\n\n`
               : `- The gripper is NOT driven (only shown in the sim)\n\n`) +
-            `Stop in the web app or closing the MuJoCo window sends stop to the robot.`
+            `Stop in the web app sends stop to the robot.`
     );
     if (!ok) return;
     this.busy = true;
@@ -479,11 +500,17 @@ export class AutoPickController {
     try {
       const runId = await startRealRun(this.runId, this.selected, { ip, src, speed, gripper });
       this.processRunning = true;
-      this.watch(runId, (done, message) => {
-        this.busy = false;
-        if (done) this.setStatus(message, 'ok');
-        else this.fail(message);
-      });
+      this.live.start(runId, fake ? 'Real Sim: simulated robot (fake)' : `Real Sim: EC66 at ${ip} (live)`);
+      this.watch(
+        runId,
+        (done, message) => {
+          this.busy = false;
+          this.live.finish(done, message);
+          if (done) this.setStatus(message, 'ok');
+          else this.fail(message);
+        },
+        (st) => st.state === 'running' && st.message && this.live.setMessage(st.message)
+      );
     } catch (err: any) {
       this.fail(`Could not start Real Sim: ${err?.message || err}.`);
     }
@@ -509,11 +536,17 @@ export class AutoPickController {
     try {
       const runId = await startRealRun(this.runId, this.selected, { ip, src, speed, gripper: false }, 'home');
       this.processRunning = true;
-      this.watch(runId, (done, message) => {
-        this.busy = false;
-        if (done) this.setStatus(message, 'ok');
-        else this.fail(message);
-      });
+      this.live.start(runId, fake ? 'Go Home: simulated robot (fake)' : `Go Home: EC66 at ${ip} (live)`);
+      this.watch(
+        runId,
+        (done, message) => {
+          this.busy = false;
+          this.live.finish(done, message);
+          if (done) this.setStatus(message, 'ok');
+          else this.fail(message);
+        },
+        (st) => st.state === 'running' && st.message && this.live.setMessage(st.message)
+      );
     } catch (err: any) {
       this.fail(`Could not start Go Home: ${err?.message || err}.`);
     }

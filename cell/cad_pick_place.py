@@ -194,6 +194,7 @@ class CadPickPlace:
         status.info['robot'] = self.robot.label
         self.headless, self.snap_dir = headless, snapshots
         self.viewer = self.renderer = None
+        self.web = None   # WebView: the live scene in the web app (start_web_view)
         self.speed = float(cfg.get('speed', 1.0))
 
         status.update('converting', f'Converting {os.path.basename(step_path)} to meshes (cached after first run)...')
@@ -433,13 +434,21 @@ class CadPickPlace:
         t0 = time.time()
         for i in range(n):
             mujoco.mj_step(m, d)
-            if self.viewer is not None and i % 8 == 0:
-                if not self.viewer.is_running():
-                    raise KeyboardInterrupt
-                self.viewer.sync()
+            if self.web is not None:
+                self.web.frame(d, d.time)
+            if i % 8 == 0 and (self.viewer is not None or self.web is not None):   # watched: real time
+                if self.viewer is not None:
+                    if not self.viewer.is_running():
+                        raise KeyboardInterrupt
+                    self.viewer.sync()
                 lag = (i + 1) * m.opt.timestep / self.speed - (time.time() - t0)
                 if lag > 0:
                     time.sleep(lag)
+
+    def start_web_view(self, run_dir, T_view, label=''):
+        """Streams this scene to the web app from now on (web_view.py)."""
+        from .web_view import WebView
+        self.web = WebView(self.model, self.data, run_dir, T_view, label)
 
     def move(self, q_waypoints, seconds, grip):
         """Smoothly drives the arm through joint waypoints (piecewise-linear, cosine time scaling).

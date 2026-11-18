@@ -67,6 +67,11 @@ class JobRunner:
         status_path = os.path.join(run_dir, 'status.json')
         with self._lock:
             self._stop_locked(wait=True)
+            for old in ('scene.json', 'frames.bin'):   # the web view of the previous job in this run
+                try:
+                    os.remove(os.path.join(run_dir, old))
+                except FileNotFoundError:
+                    pass
             _write_json(status_path, {'state': 'running', 'phase': 'starting', 'message': 'Starting...'})
             log = open(os.path.join(run_dir, 'log.txt'), 'ab')
             # PYTHONPATH = the repo only: a ROS (or other) PYTHONPATH from the shell must not leak into the job

@@ -763,6 +763,7 @@ class AutoPickPlace(CadPickPlace):
         mujoco.mj_forward(m, d)
         self.snapshot('preview_00_start')
         width_now = plan['phases'][0]['width']
+        clock = 0.0
         for k, phase in enumerate(plan['phases']):
             self.phase(phase['name'], f"Preview: {phase['label']}")
             attached = phase['attached']
@@ -785,15 +786,21 @@ class AutoPickPlace(CadPickPlace):
                     self._set_part_qpos(site_T(m, d, TCP_SITE) @ T_tcp_part)
                 d.qvel[:] = 0
                 mujoco.mj_forward(m, d)
+                clock += 1 / 30
+                if self.web is not None:
+                    self.web.frame(d, clock)
                 if self.viewer is not None:
                     if not self.viewer.is_running():
                         raise KeyboardInterrupt
                     self.viewer.sync()
+                if self.viewer is not None or self.web is not None:
                     time.sleep(1 / 30)
             width_now = width_b
             if attached and plan['phases'][k + 1]['attached'] is False:
                 self._set_part_qpos(np.array(plan['T_wp_placed']))
                 mujoco.mj_forward(m, d)
+                if self.web is not None:
+                    self.web.frame(d, clock, force=True)
             self.snapshot(f"preview_{k + 1:02d}_{phase['name']}")
         return f"Preview finished: {plan['durationS']:.0f} s of motion, nothing was simulated."
 
@@ -1057,7 +1064,9 @@ def main():
         with open(args.config) as f:
             cfg = json.load(f)
         step, req, q_part = load_request(args)
-        headless = args.headless or args.mode == 'plan'
+        # web_view (config): Sim / Real Sim are watched live in the web app; the MuJoCo window is optional
+        web_cfg = {'enabled': True, 'mujoco_window': False, **(cfg.get('web_view') or {})}
+        headless = args.headless or args.mode == 'plan' or not web_cfg['mujoco_window']
 
         if args.mode == 'plan':
             sim = AutoPickPlace(step, req, q_part, cfg, status, headless=True)
@@ -1090,6 +1099,9 @@ def main():
         req = dict(req, robotId=doc['robot'], gripperId=doc['gripper'], tcpOffset=doc['tcpOffset'],
                    preGraspDistance=plan['grasp']['preGraspDistance'], grasp=plan['grasp'])
         sim = AutoPickPlace(step, req, q_part, cfg, status, headless=headless, snapshots=args.snapshots)
+        if web_cfg['enabled'] and args.status and not args.headless:   # --headless: tests / batch runs
+            sim.start_web_view(os.path.dirname(os.path.abspath(args.status)),
+                               inv(np.array(doc['part']['T_world_part'])), label=args.mode)
         if args.mode in ('real', 'home'):
             if not args.robot_ip:
                 raise PlanError('Real mode needs --robot-ip.')
@@ -1132,6 +1144,9 @@ def main():
         traceback.print_exc()
         status.update('failed', f'Simulator error: {type(e).__name__}: {e}', state='failed', ok=False)
         return 1
+    finally:
+        if sim is not None and sim.web is not None:
+            sim.web.close()
 
 
 if __name__ == '__main__':

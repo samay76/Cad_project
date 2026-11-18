@@ -136,3 +136,21 @@ def test_match_turns_follows_the_robots_wrist_turn():
     done = real_robot.match_turns(wps, start, lo, hi)
     assert done == ['J4 +360 deg', 'J5 +360 deg']
     assert np.allclose(np.degrees(wps[0]['q']), [180, -78, -75, 243, 271, 1.0])
+
+
+def test_web_view_streams_the_cell(cell_run, tmp_path):
+    """The live view: scene.json lists the visible cell and frames.bin gets the moving bodies' poses."""
+    from cell.web_view import WebView
+    sim, doc, plan, _ = cell_run
+    view = WebView(sim.model, sim.data, str(tmp_path), np.eye(4), label='test', fps=30)
+    for k in range(1, 11):
+        view.frame(sim.data, k / 60.0)   # 60 calls in 1/6 s at 30 fps: every second one is kept
+    view.close()
+    with open(tmp_path / 'scene.json') as f:
+        scene = json.load(f)
+    assert {'link1', 'g_base', 'cad_part'} <= set(scene['bodies'])
+    assert len(scene['geoms']) > 20 and any(g['type'] == 'mesh' for g in scene['geoms'])
+    data = np.fromfile(tmp_path / 'frames.bin', dtype='<f4').reshape(-1, scene['frameFloats'])
+    assert len(data) == 6                     # the first frame + 5 at 30 fps
+    i = scene['bodies'].index('link1')
+    assert np.allclose(data[-1, 1 + 7 * i: 1 + 7 * i + 3], sim.data.xpos[sim.model.body('link1').id], atol=1e-6)

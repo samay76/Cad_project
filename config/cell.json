@@ -37,6 +37,11 @@
   "settle_seconds": 1.5,
   "preview_seconds": 3.0,
   "speed": 1.0,
+  "web_view": {
+    "_comment": "Sim, Preview Robot, Real Sim and Go Home are shown live in the web app's 3D view (the same cell as MuJoCo). mujoco_window: also open the MuJoCo window on this PC.",
+    "enabled": true,
+    "mujoco_window": false
+  },
   "grasp_test": {
     "_comment": "Sim-to-real grasp check. enabled=true: Sim and Real Sim only go to the taught pick point, wait wait_before_close_s, close the gripper on the part in the fixture, hold hold_closed_s, open, back out along the approach line and go home. No lift, camera or place. false = the full pick, camera and place again.",
     "enabled": true,

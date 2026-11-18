@@ -11,6 +11,9 @@ The API is the one the web app calls (web/src/autopick/api.ts); each job runs as
   POST /api/mujoco/stop        stops the running job (real mode: sends `stop` to the robot)
   GET  /api/mujoco/status?id=<runId>      the job's progress (status.json)
   GET  /api/mujoco/fixture     the pick fixture STEP for the 3D view
+  GET  /api/mujoco/view/scene?id=<runId>          the running job's cell (web_view.py), 404 until it is ready
+  GET  /api/mujoco/view/frames?id=<runId>&from=N  live body poses from frame N on (float32 frames)
+  GET  /api/mujoco/view/mesh/<hash>               one mesh of the cell (cached by the browser)
   GET  /api/health             server, config and job state
 
 Everything else serves web/dist (npm run build). Nothing outside web/dist and the run folders is served.
@@ -21,11 +24,12 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 from contextlib import asynccontextmanager
 from typing import List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -34,6 +38,7 @@ from .settings import REPO, load_settings
 
 MAX_BODY_BYTES = 64 * 1024 * 1024
 IDENT = r'^[a-z0-9_]{1,32}$'
+MESH_KEY = re.compile(r'^[0-9a-f]{32}$')
 
 
 class Vec3(BaseModel):
@@ -236,6 +241,44 @@ def create_app(settings=None):
         return {'ok': True, 'fixture': {'name': os.path.basename(ps['file']),
                                         'base64': base64.b64encode(data).decode('ascii'),
                                         'seatedSha256': hashlib.sha256(seated).hexdigest(), 'seatAll': seat_all}}
+
+    def run_file(run_id, name):
+        try:
+            return os.path.join(jobs.run_dir(run_id), name)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+
+    @app.get('/api/mujoco/view/scene')
+    def view_scene(id: str = ''):
+        path = run_file(id, 'scene.json')
+        if not os.path.exists(path):
+            return JSONResponse({'ok': False, 'message': 'No live view yet.'}, status_code=404,
+                                headers={'Cache-Control': 'no-store'})
+        return FileResponse(path, media_type='application/json', headers={'Cache-Control': 'no-store'})
+
+    @app.get('/api/mujoco/view/frames')
+    def view_frames(id: str = '', start: int = Query(0, alias='from', ge=0)):
+        scene, frames = run_file(id, 'scene.json'), run_file(id, 'frames.bin')
+        try:
+            with open(scene) as f:
+                frame_bytes = 4 * int(json.load(f)['frameFloats'])
+            with open(frames, 'rb') as f:
+                f.seek(start * frame_bytes)
+                data = f.read()
+        except (OSError, ValueError, KeyError):
+            data, frame_bytes = b'', 1
+        data = data[:len(data) - len(data) % frame_bytes]   # whole frames only
+        return Response(data, media_type='application/octet-stream', headers={'Cache-Control': 'no-store'})
+
+    @app.get('/api/mujoco/view/mesh/{key}')
+    def view_mesh(key: str):
+        if not MESH_KEY.match(key):
+            raise HTTPException(400, 'Bad mesh id.')
+        path = os.path.join(s.data_dir, 'cache', 'webview', f'{key}.bin')
+        if not os.path.exists(path):
+            raise HTTPException(404, 'Unknown mesh.')
+        return FileResponse(path, media_type='application/octet-stream',
+                            headers={'Cache-Control': 'public, max-age=31536000, immutable'})
 
     @app.api_route('/api/{rest:path}', methods=['GET', 'POST', 'PUT', 'DELETE'])
     def api_unknown(rest: str):

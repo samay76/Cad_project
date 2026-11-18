@@ -1,6 +1,8 @@
 // Browser smoke test of the whole web flow against the real server:
 //   load cad/main_part.step -> the fixture appears under it -> mark the two reference points -> Plan to Points
-// Usage (from web/, after `npm run build`):  npm run smoke        [SMOKE_SIM=1 also runs Sim in a MuJoCo window]
+// Usage (from web/, after `npm run build`):  npm run smoke
+//   SMOKE_SIM=1: also Sim, watched live in the page; SMOKE_REAL=1: Sim + Real Sim with the fake robot;
+//   SMOKE_SHOTS=<dir>: screenshots of the live view
 // Starts `python -m server` on port 8766 (CELL_PYTHON / MUJOCO_PYTHON or python3) with the data in a temp folder.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -101,14 +103,43 @@ try {
   if (!/complete motion/i.test(status)) fail(`planning: ${status}`);
   else console.log(`ok: ${status.trim().slice(0, 140)}`);
 
-  if (process.env.SMOKE_SIM) {
-    await page.click('#auto-pick-execute');
+  const shots = process.env.SMOKE_SHOTS;
+  const liveRun = async (button, what) => {
+    await page.click(button);
+    await waitFor(() => page.isVisible('.live-view-overlay.visible'), 10000, `${what}: live view shown`);
     await waitFor(
-      async () => /grasp test done|placed in the tray|NOT placed|failed/i.test((await page.textContent('#auto-pick-status')) || ''),
-      300000,
-      'Sim finished'
+      () => page.evaluate(() => (window.__viewer.getScene().getObjectByName('live_cell')?.children.length ?? 0) > 10),
+      120000,
+      `${what}: live cell built`
     );
-    console.log(`ok (Sim): ${(await page.textContent('#auto-pick-status')).trim().slice(0, 160)}`);
+    const pose = () =>
+      page.evaluate(() => {
+        const cell = window.__viewer.getScene().getObjectByName('live_cell');
+        return cell.children.filter((c) => c.type === 'Group').map((g) => g.position.toArray().map((v) => v.toFixed(4)).join()).join('|');
+      });
+    const p0 = await pose();
+    await page.waitForTimeout(4000);
+    if (shots) await page.screenshot({ path: path.join(shots, `${what}_live.png`) });
+    const p1 = await pose();
+    if (p0 === p1) fail(`${what}: the live cell did not move in 4 s`);
+    else console.log(`ok (${what}): live cell shown and moving`);
+    await waitFor(
+      async () => (await page.getAttribute('#auto-pick-status', 'class'))?.match(/is-ok|is-error/) &&
+        !(await page.isVisible('.live-view-overlay.is-live')),
+      300000,
+      `${what} finished`
+    );
+    if (shots) await page.screenshot({ path: path.join(shots, `${what}_end.png`) });
+    console.log(`ok (${what}): ${(await page.textContent('#auto-pick-status')).trim().slice(0, 160)}`);
+    if (!/is-ok/.test(await page.getAttribute('#auto-pick-status', 'class'))) fail(`${what} did not succeed`);
+  };
+  if (process.env.SMOKE_SIM || process.env.SMOKE_REAL) await liveRun('#auto-pick-execute', 'sim');
+  if (process.env.SMOKE_REAL) {
+    page.on('dialog', (d) => d.accept());
+    await page.fill('#auto-pick-real-ip', 'fake');
+    await page.dispatchEvent('#auto-pick-real-ip', 'change');
+    await waitFor(() => page.isEnabled('#auto-pick-real-run'), 10000, 'Real Sim enabled');
+    await liveRun('#auto-pick-real-run', 'real');
   }
   if (errors.length) fail(`page errors: ${errors.join(' | ')}`);
   if (!process.exitCode) console.log('SMOKE OK');
