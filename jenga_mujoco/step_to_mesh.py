@@ -12,7 +12,7 @@ uses (occt-import-js) - with OCCT's default length unit (mm). Every vertex is
 multiplied by 0.001, so a grasp pose exported by the web app in the part frame
 (mm) is valid here after the same 0.001 scale.
 
-Mesh parts (.stl / .obj, e.g. the camera scans from camera_scan_server.py) are read in mm like the web viewer
+Mesh parts (.stl / .obj) are read in mm like the web viewer
 shows them. Their mass properties come from the closed mesh (trimesh); an open mesh falls back to its convex hull.
 
 Usage:
