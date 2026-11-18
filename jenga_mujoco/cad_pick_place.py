@@ -4,7 +4,7 @@ cad_pick_place.py - Execute a grasp taught in the web CAD tool on the real CAD p
 
 Launched by the web app's "Simulate in MuJoCo" button (vite-plugins/mujocoBridge.ts), or by hand:
 
-  python cad_pick_place.py --step ../skf_cam_roller_305703_c-2z_0.stp --grasps grasps.json [--grasp-name "Grasp Pose 1"]
+  python cad_pick_place.py --step ../tests/fixtures/skf_cam_roller_305703_c-2z_0.stp --grasps grasps.json [--grasp-name "Grasp Pose 1"]
   python cad_pick_place.py --request runs/<id>/request.json          # what the web button does
   add --robot ec66 to use the Elite EC66 arm instead of the CS66 (robots.py)
   add --headless --snapshots out/ to run without a window and save PNGs per phase

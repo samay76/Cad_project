@@ -2,7 +2,7 @@
 real_robot.py - Runs a planned pick & place on the real Elite EC66, with the MuJoCo scene following it live.
 
 Used by `auto_pick_place.py --mode real` (the web app's "Real Sim" button). The robot side is taken from the
-standalone tester ec66_sim_standalone/ec66_sim.py (which is left unchanged):
+the former standalone tester ec66_sim.py:
 
   * JSON-RPC client on port 8055 (getRobotPos, moveByJoint, stop, ...). Motion needs REMOTE mode.
   * One moveByJoint per waypoint at a slow joint speed (default 5 %, hard cap 10 %), waiting until the robot

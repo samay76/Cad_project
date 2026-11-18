@@ -119,7 +119,7 @@ if __name__ == '__main__':
     ap.add_argument('--object', choices=['jenga', 'cad_part'], default='jenga')
     ap.add_argument('--gripper', choices=['2f85', 'hande'], default='2f85')
     ap.add_argument('--robot', choices=list(ROBOTS), default=DEFAULT_ROBOT)
-    ap.add_argument('--step', default=os.path.join(BASE_DIR, '..', 'skf_cam_roller_305703_c-2z_0.stp'))
+    ap.add_argument('--step', default=os.path.join(BASE_DIR, '..', 'tests', 'fixtures', 'skf_cam_roller_305703_c-2z_0.stp'))
     args = ap.parse_args()
 
     meta = None

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pick_station.py - The pick station (../pickstation.step) the part is picked from.
+pick_station.py - The pick fixture (../Cad model/Fixture.step) the part is picked from.
 
 The station is a pedestal: a base plate with screw holes and a vertical column. It is bolted to the
 table: its screw holes are put on the table's hole grid (table_base.HOLE_GRID_*), on the grid position
@@ -31,7 +31,7 @@ from table_base import HOLE_GRID_ORIGIN, HOLE_GRID_PITCH, HOLE_GRID_MAX
 
 G = mujoco.mjtGeom
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_STEP = os.path.join(BASE_DIR, '..', 'pickstation.step')
+DEFAULT_STEP = os.path.join(BASE_DIR, '..', 'Cad model', 'Fixture.step')
 CACHE_DIR = os.path.join(BASE_DIR, 'assets', 'pick_station')
 CONVERTER_VERSION = 2          # 2: + top disc (fixtures with a wider top than the column)
 MAX_HOLE_ERROR_MM = 1.0       # a station hole further than this from a table hole does not fit a screw

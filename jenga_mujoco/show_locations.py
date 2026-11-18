@@ -29,7 +29,7 @@ import time
 import numpy as np
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-BIG_HOLE_ORIGIN = (-0.1004, -0.3402)   # big 26 mm hole (0, 0), world frame (m) - as ec66_sim_standalone/ec66_sim.py
+BIG_HOLE_ORIGIN = (-0.1004, -0.3402)   # big 26 mm hole (0, 0), world frame (m) 
 BIG_HOLE_PITCH = 0.040
 BIG_HOLE_N = 17
 

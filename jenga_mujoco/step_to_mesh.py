@@ -16,7 +16,7 @@ Mesh parts (.stl / .obj, e.g. the camera scans from camera_scan_server.py) are r
 shows them. Their mass properties come from the closed mesh (trimesh); an open mesh falls back to its convex hull.
 
 Usage:
-  python step_to_mesh.py ../skf_cam_roller_305703_c-2z_0.stp            # -> assets/cad_parts/<hash>/
+  python step_to_mesh.py ../tests/fixtures/skf_cam_roller_305703_c-2z_0.stp            # -> assets/cad_parts/<hash>/
   python step_to_mesh.py part.stp --out /tmp/part --density 7850 --max-hulls 24
 """
 import argparse

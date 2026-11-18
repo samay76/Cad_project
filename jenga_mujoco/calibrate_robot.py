@@ -3,7 +3,7 @@
 calibrate_robot.py - Measure where the real robot really is relative to the table, so the sim (and the plans made in
 it) put the real gripper exactly where the sim shows it.
 
-  1. Close the gripper fully:   python ../ec66_sim_standalone/gripper_control.py close
+  1. Close the gripper fully:   python calibrate_robot.py --close-gripper
   2. With the teach pendant, jog the robot so the CLOSED FINGERTIPS just touch the table at the CENTRE of a big
      (26 mm) table hole - by default hole (15, 0), the pick hole. Gripper pointing straight down.
   3. python calibrate_robot.py                       # reads the joints (read-only), prints the error
@@ -51,6 +51,26 @@ def fingertip(model, data):
     return np.array([low[:, 0].mean(), low[:, 1].mean(), z])
 
 
+def close_gripper(gcfg):
+    """Closes the real gripper fully (step 1). Moves only the fingers."""
+    import time
+    from real_gripper import RealGripper
+    g = RealGripper(gcfg.get('port', '/dev/ttyUSB0'), int(gcfg.get('baud', 115200)), int(gcfg.get('slave', 9)))
+    try:
+        if not g.activated():
+            print('Activating the gripper (the fingers close and open once)...')
+            g.activate()
+        g.command(255, int(gcfg.get('speed', 64)), int(gcfg.get('force', 50)))
+        t0 = time.time()
+        while not g.done(255)[0]:
+            if time.time() - t0 > 8.0:
+                raise RuntimeError('the gripper did not close within 8 s')
+            time.sleep(0.05)
+        print(f'Gripper closed (position {g.position()}/255).')
+    finally:
+        g.close()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--hole', nargs=2, type=int, default=[15, 0], help='big table hole the fingertips touch (i j)')
@@ -58,9 +78,14 @@ def main():
     ap.add_argument('--src', help='local IP to connect from (found automatically if omitted)')
     ap.add_argument('--joints', nargs=6, type=float, help='joint angles in degrees instead of reading the robot')
     ap.add_argument('--write', action='store_true', help='save the corrected robot_base_offset_mm')
+    ap.add_argument('--close-gripper', action='store_true',
+                    help='only close the real 2F-85 fully (sim_config.json real_gripper port) and exit')
     args = ap.parse_args()
 
     cfg = json.load(open(CONFIG))
+    if args.close_gripper:
+        close_gripper(cfg.get('real_gripper') or {})
+        return
     robot_id, gripper = 'ec66', '2f85'
     offset = np.array(robot_base_offset(cfg, robot_id), dtype=float)
     coupling = float((cfg.get('gripper_coupling_mm') or {}).get(robot_id, {}).get(gripper, 0.0))

@@ -11,7 +11,7 @@
     "seated_part": "Cad model/main_part.step",
     "seat_all_parts": true,
     "_seat_all_comment": "true: EVERY part loaded in the web goes on the fixture the way main_part does (its STEP frame = the fixture's STEP frame), because all parts share the same mounting; only the pick points change. Each part's STEP must be exported in the fixture's coordinate frame. false: only seated_part goes on it.",
-    "_fixture_comment": "Fixture.step bolted over the big corner hole at pick_xy (its 4 screw holes on the table grid). seated_part = the part made for it: it goes on the fixture as the two STEPs fit together (same CAD frame), held until the gripper closes. Other parts sit on the fixture top. The old station: file pickstation.step, near_xy [0.45, -0.10], no seated_part."
+    "_fixture_comment": "Fixture.step bolted over the big corner hole at pick_xy (its 4 screw holes on the table grid). seated_part = the part made for it: it goes on the fixture as the two STEPs fit together (same CAD frame), held until the gripper closes. Other parts sit on the fixture top."
   },
   "place_xy": [0.55, 0.15],
   "place_floor_z": 0.006,

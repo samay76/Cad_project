@@ -1,7 +1,7 @@
 """
 real_gripper.py - Robotiq 2F-85 on the laptop's USB/RS-485 adapter (Modbus RTU), for Real Sim (real_robot.py).
 
-Same protocol as ec66_sim_standalone/gripper_control.py + gripper_read.py (left unchanged there):
+Robotiq Modbus RTU protocol:
   status  = FC04 read of 3 input registers at 0x07D0
   command = FC16 write of 3 output registers at 0x03E8: rACTION, 0, 0, position, speed, force
 Position 0 = open .. 255 = closed. The fingers stop on an object at the set force.
