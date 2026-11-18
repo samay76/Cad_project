@@ -1,6 +1,6 @@
 /**
  * Runs the automatic pick & place workflow in the web app:
- *   Load STEP / mesh (or scan from the camera) -> mark two points, one per finger -> plan -> preview -> Sim -> Real Sim.
+ *   Load STEP / mesh -> mark two points, one per finger -> plan -> preview -> Sim -> Real Sim.
  * Real Sim (jenga_mujoco/real_robot.py) moves the real EC66 through the planned joints; it is enabled only once the
  * Sim of the same plan and grasp has run to the end.
  * Grasp and motion planning happen in Python (jenga_mujoco/auto_pick_place.py), reached through the
@@ -9,7 +9,6 @@
 import * as THREE from 'three';
 import type { GraspController } from '../gripper/GraspController';
 import type { AutoPickPanel, AutoPickView } from '../ui/AutoPickPanel';
-import type { CameraFeedPanel } from '../ui/CameraFeedPanel';
 import type { ClickedPointInfo, Pose, SavedGrasp } from '../types';
 import type { Viewer } from '../viewer/Viewer';
 import { GRIPPERS, type GripperId } from '../config';
@@ -34,7 +33,6 @@ export interface AutoPickDeps {
   getGraspController: () => GraspController | null;
   getPart: () => { name: string; buffer: ArrayBuffer | null };
   getGripperId: () => GripperId;
-  getCameraPanel: () => CameraFeedPanel | null;
   getRobotId: () => string;
   restoreGrasp: (grasp: SavedGrasp) => Promise<void>;
   showError: (message: string, title: string) => void;
@@ -184,7 +182,7 @@ export class AutoPickController {
         title: `Grasp ${i + 1}: ${plan.mode} grip, ${plan.widthMm.toFixed(1)} mm`,
         detail:
           `Approach ${plan.approachTiltDeg.toFixed(0)}° from vertical, ${plan.durationS.toFixed(0)} s motion` +
-          (plan.inspectionViews ? `, ${plan.inspectionViews} camera views` : '')
+          (plan.graspTest ? ' (grasp test)' : '')
       }))
     });
   }
@@ -284,7 +282,7 @@ export class AutoPickController {
     const { name, buffer } = this.deps.getPart();
     const root = this.partRoot();
     const grasp = this.deps.getGraspController();
-    if (!buffer || !root) return this.fail('Load a CAD file or scan the part from the camera first.');
+    if (!buffer || !root) return this.fail('Load a CAD file first.');
     if (!SIM_PART_FILE.test(name)) {
       return this.fail('Automatic pick & place needs a STEP (.step/.stp) or mesh (.stl/.obj, in mm) part.');
     }
@@ -440,21 +438,14 @@ export class AutoPickController {
       const key = this.simKey();
       const runId = await startRun(this.runId, this.selected, mode);
       this.processRunning = true;
-      const camera = mode === 'execute' ? this.deps.getCameraPanel() : null;
-      camera?.start(runId);
       this.watch(
         runId,
         (ok, message, st) => {
           this.busy = false;
-          camera?.finish(message);
           // The whole motion was played (even if the part missed the tray): the user has checked it.
           if (mode === 'execute' && st?.state === 'done' && key === this.simKey()) this.simChecked = key;
           if (ok) this.setStatus(message + (this.simChecked === key ? ' Real Sim is now enabled.' : ''), 'ok');
           else this.fail(message);
-        },
-        (st) => {
-          if (st.info?.inspection) camera?.setImages(st.info.inspection);
-          if (st.state === 'running' && st.message) camera?.setCaption(st.message);
         }
       );
     } catch (err: any) {

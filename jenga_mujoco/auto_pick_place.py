@@ -10,7 +10,7 @@ Launched by the web app's Auto Pick & Place panel (vite-plugins/mujocoBridge.ts)
   python auto_pick_place.py --step part.step --click 0,20,0 --normal 0,1,0 --mode plan --plan plan.json
   python auto_pick_place.py --step part.step --plan plan.json --mode preview     # watch it, no physics
   python auto_pick_place.py --step part.step --plan plan.json --mode execute     # run it with physics
-  add --robot ec66 / --gripper hande, and --headless --snapshots out/ to run without a window
+  add --headless --snapshots out/ to run without a window
 
 Modes:
   plan     settle the part, find grasps, plan the motions, write plan.json. No window.
@@ -29,8 +29,9 @@ Each module is responsible for one thing:
   cad_pick_place.py    the MuJoCo scene, stepping, viewer and ghost gripper (CadPickPlace, reused here)
 
 Sequence: home -> turn the gripper to the grasp orientation (in place) -> straight to the pre-grasp ->
-grasp -> close -> lift -> inspection (camera on the table, set up in sim_config.json) -> transfer ->
-place -> open -> retreat -> home.
+grasp -> close -> lift -> transfer -> place in the tray -> open -> retreat -> home.
+With sim_config.json grasp_test.enabled: grasp -> wait -> close -> hold -> open -> back out -> home (the part stays
+in the fixture).
 """
 import argparse
 import dataclasses
@@ -54,11 +55,11 @@ from grasp_planner import (Candidate, GraspParams, PointsError, RayMesh, _in_cav
                            generate_candidates, grasps_from_points)
 from gripper_geometry import GripperGeometry
 from ik import N_ARM
-from motion_planner import MotionError, MotionPlanner, joint_path_length, resample
+from motion_planner import MotionError, MotionPlanner, joint_path_length
 from robots import ROBOTS
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_TCP_MM = {'2f85': 145.0, 'hande': 146.5}
+DEFAULT_TCP_MM = {'2f85': 145.0}
 PLAN_VERSION = 1
 SETTLE_MAX_S = 6.0
 SETTLE_SPEED = 0.002             # m/s and rad/s: the part counts as at rest below this
@@ -78,7 +79,6 @@ PHASE_LABELS = {
     'grip': 'Closing the gripper',
     'hold': 'Holding the part',
     'lift': 'Lifting the part',
-    'inspect': 'Showing the part to the camera',
     'transfer': 'Carrying the part to the target',
     'place': 'Lowering the part',
     'release': 'Opening the gripper',
@@ -117,7 +117,7 @@ class CandidateRejected(Exception):
 
 
 class AutoPickPlace(CadPickPlace):
-    def __init__(self, step_path, req, q_part, cfg, status, headless=False, snapshots=None, feed_dir=None):
+    def __init__(self, step_path, req, q_part, cfg, status, headless=False, snapshots=None):
         gripper = req.get('gripperId') or '2f85'
         if gripper not in GRIPPER_NAMES:
             raise PlanError(f"Unknown gripper '{gripper}' (known: {', '.join(GRIPPER_NAMES)}).")
@@ -129,7 +129,7 @@ class AutoPickPlace(CadPickPlace):
                  'preGraspDistance': float(req.get('preGraspDistance') or 100.0),
                  **grasp}
         super().__init__(step_path, grasp, q_part, cfg, status, headless=headless, snapshots=snapshots,
-                         feed_dir=feed_dir, robot=req.get('robotId'))
+                         robot=req.get('robotId'))
         self.part_quat = np.asarray(q_part, dtype=float)
         self.free_joint_dof = int(self.model.jnt_dofadr[self.model.joint(PART_JOINT).id])
         self.free_joint_adr = int(self.model.jnt_qposadr[self.model.joint(PART_JOINT).id])
@@ -471,19 +471,8 @@ class AutoPickPlace(CadPickPlace):
 
         orient, pre_path = self._path_to_pre(q_pre, T_pre, width_in)
 
-        # Last, so this time is only spent on grasps that otherwise work. It never rules a grasp out.
         self.T_part_tcp = T_part_tcp
-        inspect, skipped, transfer = self._plan_inspection_stage(T_wp, lift[-1], placed, hold, free_carry)
-        col.set_part(T_wp)
-        # Every waypoint gets the same time, so they must be evenly spaced or the big steps become speed spikes
-        # that throw the part out of the fingers. move_seconds is a minimum; long turns take longer.
-        move_s = self.insp.get('move_seconds', 2.0)
-        inspect_phases, q_prev = [], lift[-1]
-        for label, qs in inspect:
-            path = resample([q_prev, *qs])
-            inspect_phases.append(self._phase('inspect', path, hold, True, CARRY_SPEED, minimum=move_s,
-                                              label=f'Showing the part to the camera: {label}', view=label))
-            q_prev = path[-1]
+        transfer = placed['transfer']
 
         pk = self.pick
         phases = [
@@ -493,7 +482,6 @@ class AutoPickPlace(CadPickPlace):
             self._phase('grip', [q_grasp], width_in, False, seconds=float(pk['grip_seconds'])),
             self._phase('lift', lift, hold, True, CARRY_SPEED,
                         minimum=self.pick_seconds(self.cfg['lift_height_m'], 'lift_speed_m_s', 1.5)),
-            *inspect_phases,
             self._phase('transfer', transfer, hold, True, CARRY_SPEED, minimum=2.5),
             self._phase('place', placed['down'], hold, True, CARRY_SPEED, minimum=1.5),
             self._phase('release', [placed['down'][-1]], placed['release_width'], False, seconds=1.0),
@@ -519,8 +507,7 @@ class AutoPickPlace(CadPickPlace):
             'mode': cand.mode, 'widthMm': round(cand.width_mm, 1), 'approachTiltDeg': round(tilt, 1),
             'score': round(cand.score, 2), 'terms': {k: round(v, 2) for k, v in cand.terms.items()},
             'placeYawDeg': placed['yaw'], 'T_tcp_part': T_tcp_part.tolist(), 'T_wp_placed': placed['T_wp'].tolist(),
-            'durationS': round(duration, 1), 'phases': phases, 'inspectionViews': len(inspect),
-            'inspectionSkipped': skipped,
+            'durationS': round(duration, 1), 'phases': phases,
         }
 
 
@@ -600,8 +587,7 @@ class AutoPickPlace(CadPickPlace):
             'mode': cand.mode, 'widthMm': round(cand.width_mm, 1), 'approachTiltDeg': round(tilt, 1),
             'score': round(cand.score, 2), 'terms': {k: round(v, 2) for k, v in cand.terms.items()},
             'placeYawDeg': 0, 'T_tcp_part': inv(T_part_tcp).tolist(), 'T_wp_placed': np.asarray(T_wp).tolist(),
-            'durationS': round(sum(p['seconds'] for p in phases), 1), 'phases': phases, 'inspectionViews': 0,
-            'inspectionSkipped': [], 'graspTest': True,
+            'durationS': round(sum(p['seconds'] for p in phases), 1), 'phases': phases, 'graspTest': True,
         }
 
     def _clear_posture(self, T_pre, T_grasp, opening_mm, tries=60):
@@ -656,38 +642,6 @@ class AutoPickPlace(CadPickPlace):
     @staticmethod
     def _mm_vec(p):
         return {'x': float(p[0]) * 1000, 'y': float(p[1]) * 1000, 'z': float(p[2]) * 1000}
-
-    def _plan_inspection_stage(self, T_wp, q_lifted, placed, hold, free_carry):
-        """Camera views after the lift, and the transfer from the last view to above the target.
-        Returns (views [(label, joint path)], skipped reasons, transfer path). Without usable views the transfer
-        planned from the lift stands. Views are consecutive moves, so a view that fails ends the sequence."""
-        planned, skipped = self.plan_inspection(T_wp, q_lifted, hold)
-        check = free_carry(0.0)
-        views = []
-        for i, (label, qs) in enumerate(planned):
-            if not all(check(q) for q in qs):
-                skipped += [f'{name} (the part would hit something)' for name, _ in planned[i:]]
-                break
-            views.append((label, qs))
-        while views:
-            q_from = views[-1][1][-1]
-            try:
-                return views, skipped, self._transfer_after_inspection(q_from, q_lifted, placed, hold, free_carry)
-            except MotionError:
-                skipped.append(f'{views.pop()[0]} (no path to the target from this view)')
-        return views, skipped, placed['transfer']
-
-    def _transfer_after_inspection(self, q_from, q_lifted, placed, hold, free_carry):
-        """Turns the part back in place first (plan_transfer), so a tilted view does not swing it around on the way."""
-        free = free_carry(CARRY_CLEARANCE)
-        route = self.plan_transfer(q_from, placed['T_above'], q_lifted, hold)
-        if len(route) > 1 and all(free(q) for q in route):
-            try:
-                ending = self.planner.connect('transfer', route[-1], placed['q_above'], free)
-                return resample([q_from, *route, *ending])
-            except MotionError:
-                pass  # try the free-space move below
-        return self.planner.connect('transfer', q_from, placed['q_above'], free)
 
     def _inside_hold_width(self, q_grasp, step_mm=1.0):
         """Opening at which fingers inside a bore touch its walls, found on the real shapes at this depth."""
@@ -908,23 +862,9 @@ class AutoPickPlace(CadPickPlace):
                 self.step(0.6)
                 T_tcp_part0 = inv(site_T(self.model, self.data, TCP_SITE)) @ self.part_T()
                 z0 = self.part_T()[2, 3]
-                com_z0 = self._com_height()
                 if doc.get('points'):
                     finger_error = self._finger_to_points(doc['points'])
                     st.info['finger_to_point_mm'] = [round(e, 1) for e in finger_error]
-            elif name == 'inspect':
-                self.move(qs, phase['seconds'], grip_ctrl)
-                self.step(self.insp.get('hold_seconds', 0.8))
-                if self._com_height() - com_z0 < 0.5 * cfg['lift_height_m']:
-                    raise PlanError(f"The part slipped out of the gripper while being shown to the camera ({phase['view']}). "
-                                    'Try a firmer grasp, or fewer tilted views in sim_config.json.')
-                images = st.info.setdefault('inspection', [])
-                fname = f'inspect_{len(images) + 1:02d}.png'
-                if self.feed is not None:
-                    self.feed.snap(self.data, fname)
-                held, _ = pose_error(inv(site_T(self.model, self.data, TCP_SITE)) @ self.part_T(), T_tcp_part0)
-                images.append({'label': phase['view'], 'file': fname, 'slip_mm': round(held, 1)})
-                self.snapshot(f'03b_inspect_{len(images):02d}')
             elif name == 'release':
                 self.model.opt.noslip_iterations = 0
                 drop_payload(self.model)
@@ -939,7 +879,7 @@ class AutoPickPlace(CadPickPlace):
                     if rose < 0.5 * cfg['lift_height_m']:
                         raise PlanError(f"The part was not picked up (rose {rose * 1000:.0f} mm of "
                                         f"{cfg['lift_height_m'] * 1000:.0f} mm). The grip did not hold its "
-                                        f"{self.meta['mass_kg'] * 1000:.0f} g: try another grasp, the Hand-E, "
+                                        f"{self.meta['mass_kg'] * 1000:.0f} g: try another grasp "
                                         'or raise the grip force in sim_config.json.')
                 if name == 'transfer':
                     slip = pose_error(inv(site_T(self.model, self.data, TCP_SITE)) @ self.part_T(), T_tcp_part0)
@@ -958,12 +898,6 @@ class AutoPickPlace(CadPickPlace):
         summary = (f"{'Part placed in the tray' if in_tray else 'Part was NOT placed in the tray'}. "
                    f"Grasp accuracy: {grasp_err[0]:.1f} mm / {grasp_err[1]:.1f} deg. "
                    f"Slip during transport: {slip[0]:.1f} mm / {slip[1]:.1f} deg.")
-        views = len(st.info.get('inspection', []))
-        if views:
-            summary += f' Camera: {views} images.'
-        if plan.get('inspectionSkipped'):
-            st.info['inspection_skipped'] = plan['inspectionSkipped']
-            summary += f" Views skipped: {len(plan['inspectionSkipped'])}."
         if finger_error:
             summary += (f' Fingers on the marked points: within {finger_error[0]:.1f} mm (point 1) and '
                         f'{finger_error[1]:.1f} mm (point 2).')
@@ -991,11 +925,6 @@ class AutoPickPlace(CadPickPlace):
             text += (f' Fingers on the marked points: within {finger_error[0]:.1f} mm (point 1) and '
                      f'{finger_error[1]:.1f} mm (point 2).')
         return text
-
-    def _com_height(self):
-        """The part's CAD origin can be anywhere on it and swings when the part turns; its centre of mass doesn't."""
-        T = self.part_T()
-        return float((T[:3, :3] @ np.asarray(self.meta['com_m']) + T[:3, 3])[2])
 
     def _finger_to_points(self, points_mm):
         """Distance from each marked point to the finger pressing on the part, measured in the simulation: across
@@ -1160,8 +1089,7 @@ def main():
         plan = doc['plans'][args.candidate]
         req = dict(req, robotId=doc['robot'], gripperId=doc['gripper'], tcpOffset=doc['tcpOffset'],
                    preGraspDistance=plan['grasp']['preGraspDistance'], grasp=plan['grasp'])
-        feed_dir = os.path.dirname(os.path.abspath(args.status)) if args.status and args.mode == 'execute' else None
-        sim = AutoPickPlace(step, req, q_part, cfg, status, headless=headless, snapshots=args.snapshots, feed_dir=feed_dir)
+        sim = AutoPickPlace(step, req, q_part, cfg, status, headless=headless, snapshots=args.snapshots)
         if args.mode in ('real', 'home'):
             if not args.robot_ip:
                 raise PlanError('Real mode needs --robot-ip.')
@@ -1204,9 +1132,6 @@ def main():
         traceback.print_exc()
         status.update('failed', f'Simulator error: {type(e).__name__}: {e}', state='failed', ok=False)
         return 1
-    finally:
-        if sim is not None and sim.feed is not None:
-            sim.feed.close()
 
 
 if __name__ == '__main__':

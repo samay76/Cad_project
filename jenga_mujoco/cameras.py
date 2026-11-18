@@ -1,17 +1,10 @@
+"""
+cameras.py - The default MuJoCo viewer framing and a fixed full-view camera of the cell (cam_full_view).
+"""
 import mujoco
 import numpy as np
 
-from table_base import FLOOR_Z
-
-# Camera name identifiers
 CAM_FULL_VIEW = 'cam_full_view'
-CAM_WRIST = 'cam_wrist_d405'
-CAM_OVERVIEW = 'cam_overview_d405'
-CAM_LOW_ANGLE = 'cam_low_angle_d435i'
-
-CAMERA_NAMES = [CAM_FULL_VIEW, CAM_WRIST, CAM_OVERVIEW, CAM_LOW_ANGLE]
-
-G = mujoco.mjtGeom
 
 
 def lookat_quat(eye, target, up=np.array([0.0, 0.0, 1.0])):
@@ -43,195 +36,12 @@ def lookat_quat(eye, target, up=np.array([0.0, 0.0, 1.0])):
     return quat
 
 
-def add_cameras(spec, include_sensor_cameras=True, wrist_body='wrist_3_link', flange_pos=(0.0, 0.0, 0.0),
-                flange_quat=(1.0, 0.0, 0.0, 0.0)):
-    """Configures default viewing parameters and adds all cameras to the spec:
-
-    0. Default Viewer Free Camera & Full View (cam_full_view):
-       - Configures spec.stat (center & extent) and spec.visual.global_
-         so the default viewer opens with a clean, centered full view.
-       - Adds a dedicated fixed full view camera (cam_full_view) showing the
-         entire table, robot arm, workspace, and stands.
-
-    1. Camera 1 (cam_wrist_d405):
-       - Model: Intel RealSense D405
-       - Mounting: On the tool flange (wrist_body at flange_pos/flange_quat; wrist_3_link for the CS66)
-       - View: Close-up, ego-centric view of grasp and placement
-       - FOV: 58° vertical (approx 87° x 58° RGB/depth)
-
-    2. Camera 2 (cam_overview_d405):
-       - Model: Intel RealSense D405
-       - Mounting: Fixed in world (high angled overview)
-       - View: Table, taped boundary, block stacks, and robot workspace
-       - FOV: 58° vertical
-
-    3. Camera 3 (cam_low_angle_d435i):
-       - Model: Intel RealSense D435i
-       - Mounting: Fixed in world (low viewpoint at table level)
-       - View: Low-angle side view for tower height and block alignment
-       - FOV: 42° vertical (approx 69° x 42° RGB)
-    """
-    # -------------------------------------------------------------------------
-    # 0. Default Free Camera Setup & Full View Camera (cam_full_view)
-    # -------------------------------------------------------------------------
-    # Set default center & extent so viewer opens with a centered full view
+def add_cameras(spec):
+    """Default viewer framing (spec.stat / visual.global_) and a fixed camera showing the whole cell."""
     spec.stat.center = [0.35, 0.0, 0.2]
     spec.stat.extent = 1.3
     spec.visual.global_.azimuth = 145.0
     spec.visual.global_.elevation = -25.0
-
-    eye_full = np.array([1.3, -1.1, 0.95])
-    tgt_full = np.array([0.3, 0.0, 0.2])
-    q_full = lookat_quat(eye_full, tgt_full, up=[0.0, 0.0, 1.0])
-
-    cam_full_body = spec.worldbody.add_body(name='cam_full_view_body', pos=eye_full, quat=q_full)
-    cam_full = cam_full_body.add_camera(name=CAM_FULL_VIEW)
-    cam_full.fovy = 55.0
-
-    # CAD pick-and-place uses the dedicated inspection camera instead. Keep the
-    # sensor cameras available for teleoperation and dataset collection scenes.
-    if not include_sensor_cameras:
-        return
-
-    # -------------------------------------------------------------------------
-    # 1. Camera 1 — Wrist Intel RealSense D405
-    # -------------------------------------------------------------------------
-    wrist = spec.body(wrist_body)
-    eye1 = np.array([0.0, -0.07, 0.04])       # Mounted offset on wrist flange
-    tgt1 = np.array([0.0, 0.0, 0.16])        # Grasp center between finger pads
-    q1 = lookat_quat(eye1, tgt1, up=[0.0, 0.0, 1.0])
-    # flange frame -> wrist body frame
-    fq = np.asarray(flange_quat, dtype=np.float64)
-    p1, qw1 = np.zeros(3), np.zeros(4)
-    mujoco.mju_rotVecQuat(p1, eye1, fq)
-    p1 += np.asarray(flange_pos, dtype=np.float64)
-    mujoco.mju_mulQuat(qw1, fq, np.asarray(q1, dtype=np.float64))
-
-    cam1_body = wrist.add_body(name='cam_wrist_body', pos=p1, quat=qw1)
-    cam1 = cam1_body.add_camera(name=CAM_WRIST)
-    cam1.fovy = 58.0
-
-    # D405 compact casing: 42 x 42 x 23 mm (placed behind optical center in +z)
-    cam1_body.add_geom(name='cam_wrist_housing', type=G.mjGEOM_BOX,
-                       size=[0.021, 0.021, 0.0115], pos=[0.0, 0.0, 0.012],
-                       rgba=[0.18, 0.18, 0.18, 1.0], contype=0, conaffinity=0)
-    cam1_body.add_geom(name='cam_wrist_lens', type=G.mjGEOM_CYLINDER,
-                       size=[0.007, 0.001], pos=[0.0, 0.0, 0.001],
-                       rgba=[0.1, 0.25, 0.45, 1.0], contype=0, conaffinity=0)
-    # Mounting bracket to wrist flange
-    cam1_body.add_geom(name='cam_wrist_bracket', type=G.mjGEOM_BOX,
-                       size=[0.012, 0.018, 0.003], pos=[0.0, 0.028, 0.014],
-                       rgba=[0.3, 0.3, 0.3, 1.0], contype=0, conaffinity=0)
-
-    # -------------------------------------------------------------------------
-    # 2. Camera 2 — Overview Intel RealSense D405
-    # -------------------------------------------------------------------------
-    eye2 = np.array([0.35, -1.05, 0.95])      # High angled vantage in front of table
-    tgt2 = np.array([0.35, 0.05, 0.15])       # Workspace & table center
-    q2 = lookat_quat(eye2, tgt2, up=[0.0, 0.0, 1.0])
-
-    cam2_body = spec.worldbody.add_body(name='cam_overview_body', pos=eye2, quat=q2)
-    cam2 = cam2_body.add_camera(name=CAM_OVERVIEW)
-    cam2.fovy = 58.0
-
-    cam2_body.add_geom(name='cam_overview_housing', type=G.mjGEOM_BOX,
-                       size=[0.021, 0.021, 0.0115], pos=[0.0, 0.0, 0.012],
-                       rgba=[0.18, 0.18, 0.18, 1.0], contype=0, conaffinity=0)
-    cam2_body.add_geom(name='cam_overview_lens', type=G.mjGEOM_CYLINDER,
-                       size=[0.007, 0.001], pos=[0.0, 0.0, 0.001],
-                       rgba=[0.1, 0.25, 0.45, 1.0], contype=0, conaffinity=0)
-    # Stand pole from floor up to overview camera
-    stand_h = (eye2[2] - FLOOR_Z) / 2
-    spec.worldbody.add_geom(name='cam_overview_stand', type=G.mjGEOM_CYLINDER,
-                           size=[0.015, stand_h], pos=[0.35, -1.05, FLOOR_Z + stand_h],
-                           rgba=[0.25, 0.25, 0.25, 1.0], contype=0, conaffinity=0)
-
-    # -------------------------------------------------------------------------
-    # 3. Camera 3 — Low-Angle Intel RealSense D435i
-    # -------------------------------------------------------------------------
-    eye3 = np.array([0.95, -0.25, 0.16])      # Side view near table surface level
-    tgt3 = np.array([0.55, 0.15, 0.12])       # Stack / boundary center
-    q3 = lookat_quat(eye3, tgt3, up=[0.0, 0.0, 1.0])
-
-    cam3_body = spec.worldbody.add_body(name='cam_low_angle_body', pos=eye3, quat=q3)
-    cam3 = cam3_body.add_camera(name=CAM_LOW_ANGLE)
-    cam3.fovy = 42.0
-
-    # D435i horizontal form factor: 90 x 25 x 25 mm
-    cam3_body.add_geom(name='cam_low_angle_housing', type=G.mjGEOM_BOX,
-                       size=[0.045, 0.0125, 0.0125], pos=[0.0, 0.0, 0.013],
-                       rgba=[0.75, 0.75, 0.78, 1.0], contype=0, conaffinity=0)
-    cam3_body.add_geom(name='cam_low_angle_glass', type=G.mjGEOM_BOX,
-                       size=[0.042, 0.010, 0.001], pos=[0.0, 0.0, 0.001],
-                       rgba=[0.1, 0.1, 0.1, 1.0], contype=0, conaffinity=0)
-    # Floor stand beside the table edge (the camera is outside the table)
-    low_h = (eye3[2] - FLOOR_Z) / 2
-    spec.worldbody.add_geom(name='cam_low_angle_stand', type=G.mjGEOM_CYLINDER,
-                           size=[0.012, low_h], pos=[0.95, -0.25, FLOOR_Z + low_h],
-                           rgba=[0.25, 0.25, 0.25, 1.0], contype=0, conaffinity=0)
-
-
-CAM_INSPECTION = 'cam_inspection'
-
-
-def add_inspection_camera(spec, eye, target, fovy=45.0, name=CAM_INSPECTION):
-    """Inspection camera on a small post standing on the table, looking at `target` (CAD scene only).
-
-    The robot presents the picked part at `target` in several orientations (cad_pick_place.py).
-    Collision geoms are enabled so the arm planner can reject paths through the camera and stand.
-    """
-    eye, target = np.asarray(eye, dtype=float), np.asarray(target, dtype=float)
-    body = spec.worldbody.add_body(name=f'{name}_body', pos=eye, quat=lookat_quat(eye, target))
-    cam = body.add_camera(name=name)
-    cam.fovy = float(fovy)
-    collision = dict(contype=1, conaffinity=1)
-    # Intel RealSense D435-like housing (90 x 25 x 25 mm) behind the optical centre
-    body.add_geom(name=f'{name}_housing', type=G.mjGEOM_BOX, size=[0.045, 0.0125, 0.0125], pos=[0, 0, 0.0135],
-                  rgba=[0.75, 0.75, 0.78, 1.0], **collision)
-    body.add_geom(name=f'{name}_glass', type=G.mjGEOM_BOX, size=[0.042, 0.010, 0.001], pos=[0, 0, 0.001],
-                  rgba=[0.08, 0.08, 0.08, 1.0], **collision)
-    # Post from the table top up to the camera, and a round foot
-    h = float(eye[2]) - 0.012
-    spec.worldbody.add_geom(name=f'{name}_post', type=G.mjGEOM_CYLINDER, size=[0.008, h / 2],
-                            pos=[eye[0], eye[1], h / 2], rgba=[0.25, 0.25, 0.25, 1.0], **collision)
-    spec.worldbody.add_geom(name=f'{name}_foot', type=G.mjGEOM_CYLINDER, size=[0.035, 0.004],
-                            pos=[eye[0], eye[1], 0.004], rgba=[0.2, 0.2, 0.2, 1.0], **collision)
-    # Ring-light style spot next to the camera, aimed at the inspection point
-    d = target - eye
-    spec.worldbody.add_light(name=f'{name}_light', pos=eye + [0, 0, 0.05], dir=d / np.linalg.norm(d),
-                             diffuse=[0.6, 0.6, 0.6], specular=[0.2, 0.2, 0.2], cutoff=40, exponent=5,
-                             castshadow=False)
-
-
-_RENDERER_CACHE = {}
-
-
-def get_cached_renderer(model, width=640, height=480):
-    """Retrieves or creates a persistent renderer instance, avoiding expensive context recreation."""
-    key = (id(model), int(width), int(height))
-    if key not in _RENDERER_CACHE:
-        _RENDERER_CACHE[key] = mujoco.Renderer(model, int(height), int(width))
-    return _RENDERER_CACHE[key]
-
-
-def render_camera(model, data, camera_name=None, width=640, height=480):
-    """Renders a single frame from the specified camera as a uint8 RGB numpy array using cached renderer."""
-    renderer = get_cached_renderer(model, width, height)
-    if camera_name is not None:
-        renderer.update_scene(data, camera=camera_name)
-    else:
-        renderer.update_scene(data)
-    return renderer.render()
-
-
-def render_all_cameras(model, data, width=640, height=480):
-    """Renders a single frame from all cameras and returns a dictionary of RGB images."""
-    images = {}
-    renderer = get_cached_renderer(model, width, height)
-    for name in CAMERA_NAMES:
-        renderer.update_scene(data, camera=name)
-        images[name] = renderer.render()
-    # Also include default free camera view
-    renderer.update_scene(data)
-    images['free_camera_default'] = renderer.render()
-    return images
+    eye, target = np.array([1.3, -1.1, 0.95]), np.array([0.3, 0.0, 0.2])
+    body = spec.worldbody.add_body(name='cam_full_view_body', pos=eye, quat=lookat_quat(eye, target))
+    body.add_camera(name=CAM_FULL_VIEW).fovy = 55.0

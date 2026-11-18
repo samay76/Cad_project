@@ -56,18 +56,5 @@
     "approach_speed_m_s": 0.03,
     "grip_seconds": 1.5,
     "lift_speed_m_s": 0.04
-  },
-  "inspection": {
-    "_comment": "After lifting, the robot shows the part to a camera on the table (front and right side for now; back, left side, top and bottom can be added back to views). point = where the part's centre of mass is held; yaw turns around the vertical axis, tilt > 0 shows the top, and tilt < 0 shows the bottom. Views the arm cannot reach are skipped.",
-    "enabled": true,
-    "camera_pos": [0.585, -0.22, 0.55],
-    "point": [0.325, -0.22, 0.50],
-    "fovy_deg": 32,
-    "move_seconds": 6.0,
-    "hold_seconds": 0.8,
-    "views": [
-      {"label": "front", "yaw_deg": 0, "tilt_deg": 0},
-      {"label": "right side", "yaw_deg": 90, "tilt_deg": 0}
-    ]
   }
 }

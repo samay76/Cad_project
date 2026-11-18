@@ -99,7 +99,7 @@ def main():
         print(f'Robot joints (deg): ' + ' '.join(f'{v:8.2f}' for v in deg) + f'   mode {robot.mode()}')
         robot.close()
 
-    model = build(robot=robot_id, gripper=gripper, include_sensor_cameras=False, num_blocks=1,
+    model = build(robot=robot_id, gripper=gripper, num_blocks=1,
                   coupling_mm=coupling, base_offset_mm=tuple(offset))
     data = mujoco.MjData(model)
     q = np.radians(deg)

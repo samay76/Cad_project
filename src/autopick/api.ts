@@ -3,7 +3,6 @@
  * All poses are in the part's starting frame, in mm, with quaternions in xyzw order.
  */
 import type { Pose, SavedGrasp, Vector3D } from '../types';
-import type { InspectionImage } from '../ui/CameraFeedPanel';
 
 export interface PlanPhase {
   name: string;
@@ -21,8 +20,7 @@ export interface GraspPlan {
   approachTiltDeg: number;
   score: number;
   durationS: number;
-  inspectionViews: number;
-  inspectionSkipped: string[];
+  graspTest?: boolean; // sim_config grasp_test: go, close, hold, open, home (no lift / place)
   T_tcp_part: number[][];
   phases: PlanPhase[];
 }
@@ -44,7 +42,7 @@ export interface SimStatus {
   phase?: string;
   message?: string;
   ok?: boolean | null;
-  info?: { inspection?: InspectionImage[] };
+  info?: Record<string, unknown>;
 }
 
 /** A point the user marked for a finger, in the part frame (mm) with its surface normal. */

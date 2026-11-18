@@ -6,7 +6,6 @@ import { PropertiesPanel } from './ui/PropertiesPanel';
 import { GripperPanel } from './ui/GripperPanel';
 import { PartPanel } from './ui/PartPanel';
 import { GraspListView } from './ui/GraspList';
-import { CameraFeedPanel } from './ui/CameraFeedPanel';
 import { AutoPickPanel } from './ui/AutoPickPanel';
 import { GripperLoader } from './gripper/GripperLoader';
 import { GraspController } from './gripper/GraspController';
@@ -40,7 +39,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   let graspList: GraspListView | null = null;
   let graspController: GraspController | null = null;
   let partController: PartController | null = null;
-  let cameraPanel: CameraFeedPanel | null = null;
   let autoPick: AutoPickController | null = null;
   let fixtureView: FixtureView | null = null;
 
@@ -240,8 +238,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         const resp = await fetch(`/api/mujoco/status?id=${encodeURIComponent(runId)}`);
         const st = await resp.json();
-        if (st.info?.inspection) cameraPanel?.setImages(st.info.inspection);
-        if (st.state === 'running' && st.message) cameraPanel?.setCaption(st.message);
         if (st.phase && st.phase !== lastPhase && st.state === 'running') {
           lastPhase = st.phase;
           layout?.showInfo('MuJoCo simulation', st.message || st.phase);
@@ -249,7 +245,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (st.state !== 'running') {
           window.clearInterval(simPollTimer!);
           simPollTimer = null;
-          cameraPanel?.finish(st.message || '');
           if (st.ok) {
             layout?.showInfo('MuJoCo simulation finished', '');
           } else {
@@ -307,7 +302,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       const res = await resp.json();
       if (!resp.ok || !res.ok) throw new Error(res.message || `HTTP ${resp.status}`);
-      cameraPanel?.start(res.runId);
       pollSimulation(res.runId);
     } catch (err: any) {
       layout?.showError(
@@ -395,7 +389,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 2. Initialize 3D Viewer into viewport container
   viewer = new Viewer(layout.viewportContainer);
-  cameraPanel = new CameraFeedPanel(layout.viewportContainer);
 
   // 3. Initialize Part Controller
   partController = new PartController();
@@ -630,7 +623,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     getPart: () => ({ name: currentModelName, buffer: currentModelBuffer }),
     getGripperId: () => activeGripperId,
     getRobotId: () => activeRobotId,
-    getCameraPanel: () => cameraPanel,
     restoreGrasp,
     showError: (message, title) => layout?.showError(message, title)
   });
