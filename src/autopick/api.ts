@@ -26,7 +26,7 @@ export interface GraspPlan {
 }
 
 export interface PlanDocument {
-  robot?: string; // robot id the plan was made for ('ec66', 'cs66')
+  robot?: string; // robot id the plan was made for ('ec66')
   robotLabel: string;
   gripperLabel: string;
   awayFromClick: boolean;

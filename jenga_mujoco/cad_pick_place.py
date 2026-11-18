@@ -269,9 +269,9 @@ class CadPickPlace:
         status.info['tray_mm'] = [round(2000 * h) for h in self.tray_half]
 
         status.update('building', f'Building MuJoCo scene ({self.robot.label} + {GRIPPER_NAMES[self.gripper]} + part)...')
-        build_kw = dict(obj='cad_part', cad_meta=self.meta, part_pos=part_pos, part_quat=part_world_quat_wxyz,
-                        tray_half=self.tray_half,
-                        tcp_offset_mm=self.tcp_offset_mm, gravcomp=True, fine_fingers=True, gripper=self.gripper,
+        build_kw = dict(cad_meta=self.meta, part_pos=part_pos, part_quat=part_world_quat_wxyz,
+                        tray_xy=cfg['place_xy'], tray_half=self.tray_half,
+                        tcp_offset_mm=self.tcp_offset_mm, gravcomp=True, fine_fingers=True,
                         robot=self.robot.id,
                         pick_station=(*self.station, self.seated) if self.station[1] is not None else None,
                         coupling_mm=float((cfg.get('gripper_coupling_mm') or {}).get(self.robot.id, {})

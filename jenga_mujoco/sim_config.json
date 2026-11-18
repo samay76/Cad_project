@@ -33,7 +33,6 @@
   "density_kg_m3": 7850,
   "mesh_density_kg_m3": 2700,
   "grip_force_limit": 5.0,
-  "grip_force_limit_hande_N": 120.0,
   "collision_tolerance_mm": 1.0,
   "settle_seconds": 1.5,
   "preview_seconds": 3.0,

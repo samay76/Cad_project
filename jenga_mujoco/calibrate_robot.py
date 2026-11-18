@@ -96,10 +96,10 @@ def main():
         from real_robot import connect
         robot = connect(args.ip, args.src)
         deg = np.array(robot.joints())
-        print(f'Robot joints (deg): ' + ' '.join(f'{v:8.2f}' for v in deg) + f'   mode {robot.mode()}')
+        print('Robot joints (deg): ' + ' '.join(f'{v:8.2f}' for v in deg) + f'   mode {robot.mode()}')
         robot.close()
 
-    model = build(robot=robot_id, gripper=gripper, num_blocks=1,
+    model = build(robot=robot_id,
                   coupling_mm=coupling, base_offset_mm=tuple(offset))
     data = mujoco.MjData(model)
     q = np.radians(deg)

@@ -1,5 +1,5 @@
 """
-ik.py - Damped least-squares IK for the CS66 that reports *why* it failed.
+ik.py - Damped least-squares IK for the arm that reports *why* it failed.
 
 Same algorithm as recorder.solve_ik, plus: multiple seeds, joint-limit
 handling, and the final position/orientation residual so callers can raise a

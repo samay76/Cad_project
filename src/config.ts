@@ -3,9 +3,6 @@
  */
 
 export const GRIPPER_CONFIG = {
-  // Folder containing gripper assets
-  folderPath: '/home/human/nferent_cad/robotiq_2f85',
-
   // Served URL path in Vite dev server
   baseUrl: '/gripper/',
 
@@ -39,10 +36,10 @@ export const GRIPPER_CONFIG = {
 };
 
 /**
- * Selectable grippers. All share the same TCP convention: URDF root = tool flange, +Z = approach,
+ * The cell's gripper (Robotiq 2F-85). TCP convention: URDF root = tool flange, +Z = approach,
  * fingers close along X, TCP at (0, 0, tcpOffset) from the flange.
  */
-export type GripperId = '2f85' | 'hande';
+export type GripperId = '2f85';
 
 export interface GripperSpec {
   id: GripperId;
@@ -77,79 +74,12 @@ export const GRIPPERS: Record<GripperId, GripperSpec> = {
     leftTipLink: 'robotiq_85_left_finger_tip_link',
     rightTipLink: 'robotiq_85_right_finger_tip_link'
   },
-  hande: {
-    id: 'hande',
-    label: 'Robotiq Hand-E',
-    baseUrl: '/grippers/robotiq_hande/',
-    urdfFile: 'robotiq_hande.urdf',
-    packages: { robotiq_hande_description: '/grippers/robotiq_hande' },
-    maxOpeningWidth: 50.0,
-    // flange -> fingertip = 11 (coupler) + 99 (body) + 46.5 (finger) = 156.5 mm; TCP 10 mm into the finger faces
-    defaultTcpOffset: 146.5,
-    kinematics: 'prismatic',
-    leftTipLink: 'robotiq_hande_left_finger',
-    rightTipLink: 'robotiq_hande_right_finger',
-    leftFingerJoint: 'robotiq_hande_left_finger_joint',
-    rightFingerJoint: 'robotiq_hande_right_finger_joint',
-    fingerTravel: 0.025,
-    // The finger visual mesh includes the slider inside the body; use the gripping block only
-    // (bounds of finger_collision.dae; the right finger is rotated 180 deg about Z).
-    proxyBoxes: {
-      robotiq_hande_left_finger: { min: [0.0, -0.0107, 0.006], max: [0.011, 0.0105, 0.0476] },
-      robotiq_hande_right_finger: { min: [-0.011, -0.0105, 0.006], max: [0.0, 0.0107, 0.0476] }
-    }
-  }
 };
 
-/**
- * Robot arms for the MuJoCo pick & place (jenga_mujoco/robots.py). The arm does not change the taught
- * grasp (it is relative to the part); it only decides which arm executes it in the simulator.
- */
-export type RobotId = 'cs66' | 'ec66';
-
-export interface RobotSpec {
-  id: RobotId;
-  label: string;
-  payloadKg: number;
-  reachMm: number;
-}
-
-export const ROBOTS: Record<RobotId, RobotSpec> = {
-  cs66: { id: 'cs66', label: 'Elite CS66', payloadKg: 6, reachMm: 914 },
-  ec66: { id: 'ec66', label: 'Elite EC66', payloadKg: 6, reachMm: 914 }
-};
-
-const ROBOT_STORAGE_KEY = 'nferent_cad_robot';
-
-export const getStoredRobotId = (): RobotId => {
-  try {
-    const id = localStorage.getItem(ROBOT_STORAGE_KEY);
-    if (id && id in ROBOTS) return id as RobotId;
-  } catch {
-    // ignore storage errors
-  }
-  return 'cs66';
-};
-
-export const storeRobotId = (id: RobotId) => {
-  try {
-    localStorage.setItem(ROBOT_STORAGE_KEY, id);
-  } catch {
-    // ignore storage errors
-  }
-};
-
-const GRIPPER_STORAGE_KEY = 'nferent_cad_gripper';
-
-export const getStoredGripperId = (): GripperId => {
-  try {
-    const id = localStorage.getItem(GRIPPER_STORAGE_KEY);
-    if (id && id in GRIPPERS) return id as GripperId;
-  } catch {
-    // ignore storage errors
-  }
-  return '2f85';
-};
+/** The cell's robot arm (jenga_mujoco/robots.py). */
+export type RobotId = 'ec66';
+export const ROBOT_ID: RobotId = 'ec66';
+export const GRIPPER_ID: GripperId = '2f85';
 
 /** Makes `spec` the active gripper: GRIPPER_CONFIG limits follow it (used across the app). */
 export const applyGripperSpec = (spec: GripperSpec) => {
@@ -158,9 +88,4 @@ export const applyGripperSpec = (spec: GripperSpec) => {
   GRIPPER_CONFIG.maxOpeningWidth = spec.maxOpeningWidth;
   GRIPPER_CONFIG.defaultOpeningWidth = spec.maxOpeningWidth;
   GRIPPER_CONFIG.defaultTcpOffset = spec.defaultTcpOffset;
-  try {
-    localStorage.setItem(GRIPPER_STORAGE_KEY, spec.id);
-  } catch {
-    // ignore storage errors
-  }
 };

@@ -5,45 +5,35 @@ from world import add_world
 from table_base import MOUNT_PLATE_TOP_Z
 from cameras import add_cameras
 from frames import T_gbase_tcp, T_to_pos_quat
-from robots import get_robot, ROBOTS, DEFAULT_ROBOT
+from robots import get_robot, DEFAULT_ROBOT
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def build(num_blocks=1, obj='jenga', cad_meta=None, part_pos=(0.45, -0.10, 0.03), part_quat=(1, 0, 0, 0),
-          tcp_offset_mm=145.0, gravcomp=False, fine_fingers=False, gripper='2f85', return_spec=False, extra=None,
-          robot=DEFAULT_ROBOT, tray_half=None, pick_station=None, coupling_mm=0.0,
-          base_offset_mm=(0.0, 0.0, 0.0)):
-    """Builds the arm + gripper scene (default: CS66 + Robotiq 2F-85).
+def build(cad_meta=None, part_pos=(0.45, -0.10, 0.03), part_quat=(1, 0, 0, 0), tcp_offset_mm=145.0, gravcomp=False,
+          fine_fingers=False, return_spec=False, extra=None, robot=DEFAULT_ROBOT, tray_xy=None, tray_half=None,
+          pick_station=None, coupling_mm=0.0, base_offset_mm=(0.0, 0.0, 0.0), gripper='2f85'):
+    """Builds the cell: the EC66 arm with the Robotiq 2F-85, the table, tray and pick fixture, and the part.
 
-    obj='jenga'    : original Jenga blocks (default; teleop / recorder / eval unchanged)
-    obj='cad_part' : a converted STEP part (cad_meta from step_to_mesh.convert) on a free joint
-    gravcomp       : compensate arm/gripper weight (an ideal cobot controller); off for the Jenga
-                     scene so recorded/trained dynamics stay as they were
-    fine_fingers   : decompose the finger meshes into several convex pieces (finger_collision.py) so
-                     thin fingertips fit where they really fit (inside grips); off for Jenga
-    gripper        : '2f85' (Menagerie Robotiq 2F-85, default) or 'hande' (Robotiq Hand-E, hande.py)
-    robot          : arm id from robots.py: 'cs66' (default) or 'ec66'
-    tray_half      : inner half-size (x, y) of the target tray in m (CAD parts); None = the original tray
-    pick_station   : (info, placement) from pick_station.from_config: the part is picked from it (CAD parts)
+    cad_meta       : a converted STEP part (step_to_mesh.convert) on a free joint at part_pos/part_quat; None = no part
+    gravcomp       : compensate arm/gripper weight (an ideal cobot controller)
+    fine_fingers   : decompose the finger meshes into several convex pieces (finger_collision.py) so thin
+                     fingertips fit where they really fit
+    tray_xy        : centre of the target tray (sim_config.json place_xy); tray_half its inner half-size (m)
+    pick_station   : (info, placement, seat_part) from pick_station.from_config: the fixture the part is picked from
     extra(spec)    : optional callback to add more elements (e.g. the ghost gripper) before compiling
-    base_offset_mm : calibration (x, y, z mm): where the real robot base really is relative to the table, compared
-                     with the table CAD (e.g. a thicker mounting plate: z > 0). Moves the arm in the sim by that much,
-                     so the planner sends the real arm to the real part. Measured with calibrate_robot.py.
+    base_offset_mm : calibration (x, y, z mm): where the real robot base really is relative to the table CAD.
+                     Measured with calibrate_robot.py.
     coupling_mm    : coupling plate between the tool flange and the gripper (the gripper sits this much further out
                      along the flange's +Z), so the sim gripper is where the real one is
     """
+    if gripper != '2f85':
+        raise ValueError(f"Unknown gripper '{gripper}' (only the Robotiq 2F-85 '2f85')")
     rob = get_robot(robot)
     arm_xml = rob.xml_path
     grip_xml = os.path.join(BASE_DIR, 'robotiq_2f85', '2f85.xml')
     arm = mujoco.MjSpec.from_file(arm_xml)
-    if gripper == 'hande':
-        from hande import build_spec as build_hande
-        grip = build_hande()
-    elif gripper == '2f85':
-        grip = mujoco.MjSpec.from_file(grip_xml)
-    else:
-        raise ValueError(f"Unknown gripper '{gripper}' (expected '2f85' or 'hande')")
+    grip = mujoco.MjSpec.from_file(grip_xml)
 
     for j, kp, kv in zip(list(arm.joints)[:6], rob.kp, rob.kv):
         j.damping = [kv, 0, 0]
@@ -68,7 +58,7 @@ def build(num_blocks=1, obj='jenga', cad_meta=None, part_pos=(0.45, -0.10, 0.03)
     grip.body('base').add_site(name='tcp', pos=tcp_pos, quat=tcp_quat, size=[0.003, 0.003, 0.003],
                                rgba=[0, 1, 1, 0.8], group=4)
 
-    if fine_fingers and gripper == '2f85':
+    if fine_fingers:
         from finger_collision import refine
         refine(grip)
 
@@ -93,17 +83,11 @@ def build(num_blocks=1, obj='jenga', cad_meta=None, part_pos=(0.45, -0.10, 0.03)
             if b.name != 'world':
                 b.gravcomp = 1.0
 
-    if obj == 'jenga':
-        add_world(arm, num_blocks=num_blocks)
-    elif obj == 'cad_part':
-        if cad_meta is None:
-            raise ValueError("obj='cad_part' needs cad_meta (from step_to_mesh.convert)")
+    world_kw = {k: v for k, v in (('tray_xy', tray_xy), ('tray_half', tray_half)) if v is not None}
+    add_world(arm, pick_station=pick_station, **world_kw)
+    if cad_meta is not None:
         from cad_part import add_cad_part
-        add_world(arm, add_block=False, pick_station=pick_station,
-                  **({'tray_half': tray_half} if tray_half is not None else {}))
         add_cad_part(arm, cad_meta, pos=part_pos, quat=part_quat)
-    else:
-        raise ValueError(f"Unknown object type '{obj}' (expected 'jenga' or 'cad_part')")
 
     add_cameras(arm)
     if extra is not None:
@@ -114,19 +98,13 @@ def build(num_blocks=1, obj='jenga', cad_meta=None, part_pos=(0.45, -0.10, 0.03)
 
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--object', choices=['jenga', 'cad_part'], default='jenga')
-    ap.add_argument('--gripper', choices=['2f85', 'hande'], default='2f85')
-    ap.add_argument('--robot', choices=list(ROBOTS), default=DEFAULT_ROBOT)
-    ap.add_argument('--step', default=os.path.join(BASE_DIR, '..', 'tests', 'fixtures', 'skf_cam_roller_305703_c-2z_0.stp'))
+    ap = argparse.ArgumentParser(description='Open the cell in the MuJoCo viewer (optionally with a STEP part).')
+    ap.add_argument('--step', help='STEP/STL part to show on the table')
     args = ap.parse_args()
-
     meta = None
-    if args.object == 'cad_part':
+    if args.step:
         from step_to_mesh import convert
         meta = convert(args.step)
-    model = build(obj=args.object, cad_meta=meta, gripper=args.gripper, robot=args.robot)
+    model = build(cad_meta=meta)
     print('bodies:', model.nbody, 'joints:', model.njnt, 'actuators:', model.nu, 'cameras:', model.ncam)
-    if args.object == 'jenga' and args.robot == 'cs66' and args.gripper == '2f85':
-        mujoco.mj_saveModel(model, 'cs66_2f85.mjb')
     mujoco.viewer.launch(model)

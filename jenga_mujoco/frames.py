@@ -13,8 +13,7 @@ Web CAD tool (Three.js, Z-up, millimeters):
 
 MuJoCo (Z-up, meters, quaternions in (w, x, y, z) order):
   part      : body 'cad_part' == STEP frame scaled by 0.001 (step_to_mesh.py)
-  g_base    : gripper 'base' body (attached to the CS66 flange): Menagerie Robotiq 2F-85, or the
-              Robotiq Hand-E built in hande.py (whose base frame IS the URDF root, no offset)
+  g_base    : gripper 'base' body (attached to the EC66 flange): Menagerie Robotiq 2F-85
   g_tcp     : site on g_base at T_gbase_tcp = T_gbase_urdfbase * T_urdfbase_tcp
 
 T_gbase_urdfbase - derived by matching the two gripper models' joint origins:
@@ -80,9 +79,7 @@ def web_pose_to_T(pose):
 
 def T_gbase_tcp(tcp_offset_mm, gripper='2f85'):
     """Pose of the web TCP on the gripper base body 'g_base'.
-    2F-85: Menagerie base differs from the URDF base (see above). Hand-E (hande.py): base == URDF root."""
-    if gripper == 'hande':
-        return make_T([0.0, 0.0, tcp_offset_mm * MM], [1, 0, 0, 0])
+    2F-85: Menagerie base differs from the URDF base (see above)."""
     T_gb_ub = make_T(GBASE_TO_URDFBASE_POS, GBASE_TO_URDFBASE_QUAT)
     T_ub_tcp = make_T([0.0, 0.0, tcp_offset_mm * MM], [1, 0, 0, 0])
     return T_gb_ub @ T_ub_tcp

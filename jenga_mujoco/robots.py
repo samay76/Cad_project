@@ -1,12 +1,9 @@
 """
-robots.py - The robot arms the simulator can use.
+robots.py - The robot arm of the cell: Elite EC66 (ec66/ec66.xml, from Elite's official URDF,
+github.com/Elite-Robots/ROS).
 
-Each arm is a MuJoCo model whose first 6 joints are the arm joints (ik.N_ARM). The gripper is
-attached at `flange_pos/flange_quat` on `flange_body` (+Z out of the tool flange), so the gripper and
-TCP conventions (frames.py) are the same for every arm.
-
-  cs66 : Elite CS66 (cs66/cs66.xml), the original arm - default everywhere.
-  ec66 : Elite EC66 (ec66/ec66.xml), from Elite's official URDF (github.com/Elite-Robots/ROS).
+The arm is a MuJoCo model whose first 6 joints are the arm joints (ik.N_ARM). The gripper is attached at
+`flange_pos/flange_quat` on `flange_body` (+Z out of the tool flange), see frames.py.
 """
 import os
 from dataclasses import dataclass
@@ -39,25 +36,19 @@ class RobotSpec:
 
 
 ROBOTS = {
-    'cs66': RobotSpec(
-        id='cs66', label='Elite CS66', xml='cs66/cs66.xml',
-        flange_body='wrist_3_link', flange_pos=(0.0, 0.0, 0.0), flange_quat=(1.0, 0.0, 0.0, 0.0),
-        home=(3.14159, -1.2, 1.8, -2.2, -1.57, 0.0),
-        base_bodies=('base_link', 'shoulder_link')),
     'ec66': RobotSpec(
         id='ec66', label='Elite EC66', xml='ec66/ec66.xml',
         flange_body='link6', flange_pos=(0.0, -0.089, 0.0), flange_quat=(0.0, 0.0, -0.707107, 0.707107),
-        # Elbow-up IK solution that puts the gripper TCP where the CS66 home puts it.
+        # Default elbow-up posture; the real home is sim_config.json pick_motion.home_joints_deg.ec66.
         home=(0.045, -1.284, 1.705, -2.022, 1.569, 0.045),
         base_bodies=('base_link', 'link1'),
-        # The EC66 is ~3x lighter than the CS66. With the CS66 gains it follows the corners of the
-        # piecewise-linear joint path sharply and shakes the part loose (2-3x the slip); 0.3x gives
-        # the CS66's slip on the same grasps.
+        # Lower gains than a heavy arm: higher ones follow the corners of the piecewise-linear joint path
+        # sharply and shake the part loose (2-3x the slip).
         kp=(600, 600, 450, 120, 120, 60),
         kv=(60, 60, 45, 12, 12, 6)),
 }
 
-DEFAULT_ROBOT = 'cs66'
+DEFAULT_ROBOT = 'ec66'
 
 
 def get_robot(robot_id):

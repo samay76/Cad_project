@@ -8,7 +8,7 @@ accepts, e.g. fingers inserted into a 36 mm bore for an inside grip.
 
 refine(grip_spec) replaces these collision geoms by a CoACD convex decomposition of the same mesh
 (same body, pose and contact parameters). Visual geoms are untouched. Pieces are cached in
-assets/gripper_hulls/. The Jenga scene does not call this, so its dynamics stay as recorded.
+assets/gripper_hulls/.
 """
 import json
 import os

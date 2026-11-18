@@ -14,12 +14,9 @@ import { FixtureView } from './autopick/FixtureView';
 import type { SavedGrasp, ClickedPointInfo, GripperState } from './types';
 import {
   GRIPPERS,
-  ROBOTS,
-  applyGripperSpec,
-  getStoredGripperId,
-  getStoredRobotId,
-  storeRobotId,
-  type GripperId
+  GRIPPER_ID,
+  ROBOT_ID,
+  applyGripperSpec
 } from './config';
 import './styles.css';
 
@@ -43,9 +40,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   let lastClickedPoint: ClickedPointInfo | null = null;
   let currentModelName = 'model.step';
   let currentModelBuffer: ArrayBuffer | null = null;
-  let activeGripperId: GripperId = getStoredGripperId();
+  const activeGripperId = GRIPPER_ID;
   applyGripperSpec(GRIPPERS[activeGripperId]);
-  let activeRobotId = getStoredRobotId();
+  const activeRobotId = ROBOT_ID;
 
   // Helper to load CAD geometry safely
   const loadCADBuffer = async (buffer: ArrayBuffer, fileName: string) => {
@@ -95,11 +92,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       layout?.showError('Please load the gripper first.');
       return;
     }
-    const gid = grasp.gripperId ?? '2f85';
-    if (gid !== activeGripperId) {
-      await selectGripper(gid);
-      if (activeGripperId !== gid) return;
-    }
     graspController.setRelativeGraspPose(grasp.tcpPose, grasp.rpy);
     graspController.setOpeningWidth(
       grasp.measuredGraspWidth !== undefined ? grasp.measuredGraspWidth : grasp.openingWidth
@@ -108,43 +100,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     graspController.setPreGraspDistance(grasp.preGraspDistance ?? 100);
     if (grasp.standoff !== undefined) graspController.setStandoff(grasp.standoff);
     if (grasp.depth !== undefined) graspController.setDepth(grasp.depth);
-  };
-
-  // Gripper selector: switches the gripper model in place (TCP pose kept) and remembers the choice
-  let switchingGripper = false;
-  const selectGripper = async (id: GripperId) => {
-    if (id === activeGripperId || switchingGripper) return;
-    const spec = GRIPPERS[id];
-    if (!graspController) {
-      activeGripperId = id;
-      applyGripperSpec(spec);
-      autoPick?.invalidate();
-      layout?.setActiveGripper(id);
-      gripperPanel?.setMaxOpening(spec.maxOpeningWidth);
-      return;
-    }
-    switchingGripper = true;
-    try {
-      layout?.showLoading(true, `Loading ${spec.label} gripper assets...`);
-      const model = await GripperLoader.loadGripper(spec);
-      activeGripperId = id;
-      applyGripperSpec(spec);
-      autoPick?.invalidate();
-      graspController.replaceGripperModel(model);
-      layout?.setActiveGripper(id);
-      gripperPanel?.setMaxOpening(spec.maxOpeningWidth);
-      layout?.showLoading(false);
-      layout?.showInfo(
-        'Gripper',
-        `${spec.label} selected (opening 0-${spec.maxOpeningWidth} mm, TCP ${spec.defaultTcpOffset} mm from the flange).`,
-        4000
-      );
-    } catch (err: any) {
-      layout?.showLoading(false);
-      layout?.showError(err?.message || `Failed to load ${spec.label}.`, 'Gripper');
-    } finally {
-      switchingGripper = false;
-    }
   };
 
   // 1. Initialize master layout
@@ -163,16 +118,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     onLoadGripperClick: async () => {
       await loadGripperModel();
     },
-    onGripperSelect: (id) => {
-      selectGripper(id);
-    },
-    onRobotSelect: (id) => {
-      activeRobotId = id;
-      storeRobotId(id);
-      autoPick?.invalidate();
-      layout?.setActiveRobot(id);
-      layout?.showInfo('Robot arm', `${ROBOTS[id].label} selected: the pick & place in MuJoCo uses it.`);
-    },
     onTransformModeToggle: (mode) => {
       graspController?.setTransformMode(mode);
     },
@@ -190,7 +135,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   layout.setActiveGripper(activeGripperId);
-  layout.setActiveRobot(activeRobotId);
 
   // 2. Initialize 3D Viewer into viewport container
   viewer = new Viewer(layout.viewportContainer);

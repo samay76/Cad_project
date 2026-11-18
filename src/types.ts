@@ -113,7 +113,7 @@ export interface SavedGrasp {
   partName?: string;
   trajectory?: TrajectorySample[]; // recorded approach motion; last sample = tcpPose
   gripMode?: GripMode;
-  gripperId?: '2f85' | 'hande'; // gripper the grasp was taught with (missing = 2f85)
+  gripperId?: '2f85'; // gripper the grasp was planned for
 }
 
 export type TestPhase =
