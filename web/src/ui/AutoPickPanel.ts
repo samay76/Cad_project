@@ -1,6 +1,6 @@
 /**
  * Left-sidebar panel for the automatic pick & place: shows where the user is in
- * Load STEP / mesh or scan -> Mark two points -> Plan -> Preview -> Sim -> Real Sim, and holds the actions.
+ * Load STEP / mesh -> Mark two points -> Plan -> Preview -> Sim -> Real Sim, and holds the actions.
  * Real Sim (the real EC66 follows the planned joints) is enabled only after the Sim of the same grasp ran to the end.
  * State lives in AutoPickController; this class only renders it.
  */
@@ -71,7 +71,7 @@ export class AutoPickPanel {
     this.container.innerHTML = `
       <div class="sidebar-block auto-pick-block">
         <div class="block-header"><span class="block-title">AUTO PICK &amp; PLACE</span></div>
-        ${step(!!view.partName, view.partName ? '✓' : '·', view.partName ? escapeHtml(view.partName) : 'Load a CAD file (Load CAD) or scan the part (Scan from Camera)')}
+        ${step(!!view.partName, view.partName ? '✓' : '·', view.partName ? escapeHtml(view.partName) : 'Load a CAD file (Load CAD)')}
         ${view.partName ? pointStep(0) + pointStep(1) : ''}
         ${view.gripHint ? `<div id="auto-pick-grip-hint" class="auto-pick-hint ${view.gripHint.ok ? '' : 'is-bad'}">${escapeHtml(view.gripHint.text)}</div>` : ''}
         <div class="auto-pick-real-title">PICK OFFSET (mm, robot base X / Y / Z)</div>

@@ -294,8 +294,7 @@ export class GripperModel {
       Math.min(this.spec.maxOpeningWidth, widthMm)
     );
 
-    // Closing "angle" 0.0 = fully open, 0.8 = fully closed (2F-85 knuckle angle; prismatic grippers map
-    // it linearly to the finger travel so ContactGrip can treat all grippers alike).
+    // Closing "angle" 0.0 = fully open, 0.8 = fully closed (2F-85 knuckle angle).
     const angle = (1.0 - (this.openingWidth / this.spec.maxOpeningWidth)) * 0.8;
     this.setFingerAngles(angle, angle);
   }

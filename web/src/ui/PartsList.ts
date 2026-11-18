@@ -1,21 +1,17 @@
 import type { PartInfo } from '../types';
 
-export interface ViewControlEvents {
-  onResetView: () => void;
-  onFitToModel: () => void;
-  onToggleWireframe: () => boolean;
+export interface PartsListEvents {
   onPartSelect: (index: number) => void;
 }
 
 export class PartsListView {
   private container: HTMLElement;
-  private events: ViewControlEvents;
+  private events: PartsListEvents;
   private parts: PartInfo[] = [];
   private selectedPartIndex: number | null = null;
   private filterQuery = '';
-  private isWireframeActive = false;
 
-  constructor(container: HTMLElement, events: ViewControlEvents) {
+  constructor(container: HTMLElement, events: PartsListEvents) {
     this.container = container;
     this.events = events;
     this.render();
@@ -33,49 +29,8 @@ export class PartsListView {
     this.updateSelectionDOM();
   }
 
-  public setWireframeState(isActive: boolean) {
-    this.isWireframeActive = isActive;
-    const btn = this.container.querySelector<HTMLButtonElement>('#btn-wireframe');
-    if (btn) {
-      btn.classList.toggle('active', isActive);
-      const label = btn.querySelector('.btn-label');
-      if (label) label.textContent = isActive ? 'Wireframe: ON' : 'Wireframe: OFF';
-    }
-  }
-
   private render() {
     this.container.innerHTML = `
-      <div class="sidebar-block view-controls-block">
-        <div class="block-header">
-          <span class="block-title">VIEW CONTROLS</span>
-        </div>
-        <div class="view-buttons-grid">
-          <button id="btn-fit" class="btn btn-secondary btn-view" title="Fit Camera to Model">
-            <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-            </svg>
-            <span>Fit Model</span>
-          </button>
-          <button id="btn-reset" class="btn btn-secondary btn-view" title="Reset View Angle">
-            <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-              <path d="M3 3v5h5"/>
-            </svg>
-            <span>Reset View</span>
-          </button>
-        </div>
-
-
-        <button id="btn-wireframe" class="btn btn-secondary btn-toggle ${this.isWireframeActive ? 'active' : ''}">
-          <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polygon points="12 2 2 7 12 12 22 7 12 2"/>
-            <polyline points="2 17 12 22 22 17"/>
-            <polyline points="2 12 12 17 22 12"/>
-          </svg>
-          <span class="btn-label">${this.isWireframeActive ? 'Wireframe: ON' : 'Wireframe: OFF'}</span>
-        </button>
-      </div>
-
       <div class="sidebar-block parts-list-block">
         <div class="block-header">
           <div class="title-with-badge">
@@ -142,24 +97,6 @@ export class PartsListView {
   }
 
   private bindEvents() {
-    const fitBtn = this.container.querySelector('#btn-fit');
-    if (fitBtn) {
-      fitBtn.addEventListener('click', () => this.events.onFitToModel());
-    }
-
-    const resetBtn = this.container.querySelector('#btn-reset');
-    if (resetBtn) {
-      resetBtn.addEventListener('click', () => this.events.onResetView());
-    }
-
-    const wireframeBtn = this.container.querySelector('#btn-wireframe');
-    if (wireframeBtn) {
-      wireframeBtn.addEventListener('click', () => {
-        const newState = this.events.onToggleWireframe();
-        this.setWireframeState(newState);
-      });
-    }
-
     const filterInput = this.container.querySelector<HTMLInputElement>('#parts-filter');
     if (filterInput) {
       filterInput.addEventListener('input', (e) => {

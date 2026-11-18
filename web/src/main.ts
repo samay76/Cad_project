@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import { AppLayout } from './ui/Layout';
 import { Viewer } from './viewer/Viewer';
 import { PartsListView } from './ui/PartsList';
@@ -11,7 +10,7 @@ import { GraspController } from './gripper/GraspController';
 import { PartController } from './part/PartController';
 import { AutoPickController } from './autopick/AutoPickController';
 import { FixtureView } from './autopick/FixtureView';
-import type { SavedGrasp, ClickedPointInfo, GripperState } from './types';
+import type { SavedGrasp, GripperState } from './types';
 import {
   GRIPPERS,
   GRIPPER_ID,
@@ -37,7 +36,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   let fixtureView: FixtureView | null = null;
 
   // State
-  let lastClickedPoint: ClickedPointInfo | null = null;
   let currentModelName = 'model.step';
   let currentModelBuffer: ArrayBuffer | null = null;
   const activeGripperId = GRIPPER_ID;
@@ -68,22 +66,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (graspController) {
       graspController.setCadPartsRoot(modelRoot);
     }
-  };
-
-  // Helper to snap gripper to surface
-  const snapToLastClicked = () => {
-    if (!graspController) {
-      layout?.showError('Please load the gripper first.');
-      return;
-    }
-    if (!lastClickedPoint) {
-      layout?.showError('Please click a point on the CAD model surface first.');
-      return;
-    }
-    graspController.snapToClickedPoint(
-      lastClickedPoint.worldPoint,
-      lastClickedPoint.worldNormal
-    );
   };
 
   // Helper to restore grasp (places gripper at T_world_part * T_part_grasp)
@@ -126,12 +108,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       layout?.setActiveTarget(target);
       partPanel?.setActiveTarget(target);
     },
-    onSnapPointClick: () => {
-      snapToLastClicked();
-    },
-    onFlipApproachClick: () => {
-      graspController?.flipApproach();
-    },
   });
 
   layout.setActiveGripper(activeGripperId);
@@ -147,15 +123,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 5. Initialize Parts List in left sidebar
   partsList = new PartsListView(layout.partsListContainer, {
-    onResetView: () => {
-      viewer?.resetView();
-    },
-    onFitToModel: () => {
-      viewer?.fitToModel();
-    },
-    onToggleWireframe: () => {
-      return viewer?.toggleWireframe() ?? false;
-    },
     onPartSelect: (index) => {
       viewer?.selectPartByIndex(index);
     }
@@ -207,9 +174,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 7. Initialize Gripper Pose Panel in right sidebar
   gripperPanel = new GripperPanel(layout.gripperPanelContainer, {
-    onNumericPoseChange: (pos, rpy) => {
-      graspController?.setNumericPose(pos, rpy);
-    },
     onStepTranslate: (axis, delta) => {
       graspController?.stepTranslate(axis, delta);
       autoPick?.gripperMoved();
@@ -217,52 +181,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     onStepRotate: (axis, delta) => {
       graspController?.stepRotate(axis, delta);
       autoPick?.gripperMoved();
-    },
-    onOpeningChange: (width) => {
-      graspController?.setOpeningWidth(width);
-    },
-    onTcpOffsetChange: (offset) => {
-      graspController?.setTcpOffset(offset);
-    },
-    onPreGraspDistanceChange: (dist) => {
-      graspController?.setPreGraspDistance(dist);
-    },
-    onSnapToClickedPoint: () => {
-      snapToLastClicked();
-    },
-    onFlipApproach: () => {
-      graspController?.flipApproach();
-    },
-    onRotateApproach: (deg) => {
-      graspController?.rotateAroundApproach(deg);
-    },
-    onResetPose: () => {
-      graspController?.resetGripperPose();
-    },
-    onCloseUntilContact: (tol) => {
-      graspController?.closeUntilContact(tol);
-    },
-    onOpenToClear: () => {
-      graspController?.openToClear();
-    },
-    onAutoPlaceOnOuterWall: () => {
-      const clickPt = lastClickedPoint
-        ? new THREE.Vector3(
-            lastClickedPoint.worldPoint.x,
-            lastClickedPoint.worldPoint.y,
-            lastClickedPoint.worldPoint.z
-          )
-        : undefined;
-      graspController?.autoPlaceOnOuterWall(clickPt);
-    },
-    onStandoffChange: (s) => {
-      graspController?.setStandoff(s);
-    },
-    onDepthChange: (d) => {
-      graspController?.setDepth(d);
-    },
-    onToleranceChange: (t) => {
-      graspController?.setTolerance(t);
     }
   });
 
@@ -312,11 +230,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       layout.setGripperBadge(true);
       layout.showLoading(false);
-
-      if (lastClickedPoint) {
-        gripperPanel.setCanSnap(true);
-        layout.setCanSnap(true);
-      }
     } catch (err: any) {
       layout.showLoading(false);
       layout.showError(
@@ -339,9 +252,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 9. Connect Viewer events to UI
   viewer.setOnModelLoaded((metadata, parts) => {
     // The new model starts with nothing selected; a point on the previous part means nothing here.
-    lastClickedPoint = null;
-    layout?.setCanSnap(false);
-    gripperPanel?.setCanSnap(false);
     layout?.setLoadedFileName(metadata.fileName);
     partsList?.setParts(parts);
     propertiesPanel?.setModelMetadata(metadata);
@@ -365,16 +275,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     partsList?.setSelectedPart(state.selectedPartIndex);
     propertiesPanel?.setSelectionState(state);
 
-    if (state.clickedPoint) {
-      lastClickedPoint = state.clickedPoint;
-      autoPick?.markPoint(state.clickedPoint);
-      layout?.setCanSnap(true);
-      gripperPanel?.setCanSnap(true);
-    } else {
-      lastClickedPoint = null;
-      layout?.setCanSnap(false);
-      gripperPanel?.setCanSnap(false);
-    }
+    if (state.clickedPoint) autoPick?.markPoint(state.clickedPoint);
   });
 
   viewer.setOnError((errorMsg) => {

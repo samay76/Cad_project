@@ -5,8 +5,6 @@ export interface LayoutCallbacks {
   onLoadGripperClick: () => void;
   onTransformModeToggle: (mode: 'translate' | 'rotate') => void;
   onTargetToggle?: (target: 'part' | 'gripper') => void;
-  onSnapPointClick: () => void;
-  onFlipApproachClick: () => void;
 }
 
 export class AppLayout {
@@ -37,8 +35,6 @@ export class AppLayout {
   private btnTbEditPart!: HTMLButtonElement;
   private btnTbTrans!: HTMLButtonElement;
   private btnTbRot!: HTMLButtonElement;
-  private btnTbSnap!: HTMLButtonElement;
-  private btnTbFlip!: HTMLButtonElement;
 
   constructor(root: HTMLElement, callbacks: LayoutCallbacks) {
     this.root = root;
@@ -63,7 +59,7 @@ export class AppLayout {
               </div>
               <div class="brand-text">
                 <span class="brand-title">COBOT PICK-POINT</span>
-                <span class="brand-subtitle">CAD & Gripper Pose Tool (Step 2)</span>
+                <span class="brand-subtitle">Teach · Sim · Real robot</span>
               </div>
             </div>
 
@@ -153,27 +149,6 @@ export class AppLayout {
                 </button>
               </div>
 
-              <div class="toolbar-divider"></div>
-
-              <button id="tb-btn-snap" class="tb-btn" title="Snap Gripper to Clicked Surface Point" disabled>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="3"/>
-                  <path d="M12 2v3m0 14v3M2 12h3m14 0h3"/>
-                </svg>
-                <span>Snap to Point</span>
-              </button>
-
-              <button id="tb-btn-flip" class="tb-btn" title="Flip Approach Direction (180°)">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="m3 16 4 4 4-4"/>
-                  <path d="M7 20V4"/>
-                  <path d="m21 8-4-4-4 4"/>
-                  <path d="M17 4v16"/>
-                </svg>
-                <span>Flip (180°)</span>
-              </button>
-
-              <div class="toolbar-divider"></div>
 
 
             </div>
@@ -259,8 +234,6 @@ export class AppLayout {
     this.btnTbEditPart = this.root.querySelector('#tb-btn-edit-part')!;
     this.btnTbTrans = this.root.querySelector('#tb-btn-trans')!;
     this.btnTbRot = this.root.querySelector('#tb-btn-rot')!;
-    this.btnTbSnap = this.root.querySelector('#tb-btn-snap')!;
-    this.btnTbFlip = this.root.querySelector('#tb-btn-flip')!;
   }
 
   private bindEvents() {
@@ -312,13 +285,6 @@ export class AppLayout {
       this.callbacks.onTransformModeToggle('rotate');
     });
 
-    this.btnTbSnap.addEventListener('click', () => {
-      this.callbacks.onSnapPointClick();
-    });
-
-    this.btnTbFlip.addEventListener('click', () => {
-      this.callbacks.onFlipApproachClick();
-    });
 
     // Right Sidebar Tab Switcher
     const rightTabBtns = this.root.querySelectorAll<HTMLButtonElement>('.right-tab-btn');
@@ -424,10 +390,6 @@ export class AppLayout {
   public setTransformMode(mode: 'translate' | 'rotate') {
     this.btnTbTrans.classList.toggle('active', mode === 'translate');
     this.btnTbRot.classList.toggle('active', mode === 'rotate');
-  }
-
-  public setCanSnap(canSnap: boolean) {
-    this.btnTbSnap.disabled = !canSnap;
   }
 
   public setGripperBadge(loaded: boolean) {
