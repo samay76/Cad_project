@@ -1,157 +1,148 @@
-# CAD-Based Cobot Pick-Point Tool (Step 2: Gripper & Grasp Pose)
+# Pick cell: teach → simulate → run on the real robot
 
-> 📘 **Looking for full architectural details and handoff documentation?**  
-> See the complete [STEP2_IMPLEMENTATION_AND_HANDOFF.md](file:///home/human/nferent_cad/STEP2_IMPLEMENTATION_AND_HANDOFF.md) for data flow diagrams, coordinate frames, unit conversion rules, and future developer guidelines.
+A web application for one robot cell: an **Elite EC66** arm with a **Robotiq 2F-85** gripper picks CAD parts from a
+fixture on the table.
 
-A high-performance browser-based CAD viewer and robotic pick-point tool with full gripper integration and kinematic grasp pose planning, designed for downstream cobot pick-and-place integration.
+1. **Teach**: load a part's STEP file in the browser. It is shown seated on the pick fixture. Mark the two points the
+   fingers should grip; optionally adjust the gripper with Step Jogging or the Pick Offset.
+2. **Simulate**: plan the motion and run it in MuJoCo with physics (the window opens on the cell PC).
+3. **Run on the real robot**: Real Sim drives the real EC66 and 2F-85 through the same joints, mirrored live in MuJoCo.
 
-![Cobot Pick-Point Gripper Step 2 Screenshot](/home/human/cad-step2-verified.png)
-
-## Automatic Pick & Place
-
-Load a STEP file, click the two points where the fingers should go, and press **Plan to Points**: a collision-free robot motion to those points is computed, previewed, and executed in MuJoCo. See [jenga_mujoco/CAD_SIM.md](jenga_mujoco/CAD_SIM.md).
-
-## Tech Stack
-- **Vite 6** + **TypeScript** (Vanilla TypeScript, no unnecessary framework overhead)
-- **Three.js** (WebGL 3D rendering with OrbitControls and TransformControls)
-- **occt-import-js** (OpenCascade compiled to WebAssembly for browser-based STEP / STP / IGES parsing)
-- **Three.js STLLoader & OBJLoader** (High-speed parsing of STL and OBJ files)
-- **100% Client-Side**: Runs entirely in the browser with zero backend requirements
-
----
-
-## Features Implemented
-
-### 1. Gripper Asset Serving & Unit Conversion
-- **Robotiq 2F-85 Gripper**: Served directly by Vite at `/gripper/` from `/home/human/nferent_cad/robotiq_2f85`.
-- **Unit Conversion Centralization**: Robotiq 2F-85 description and STL meshes are defined in **meters**. CAD models operate in **millimeters**. Centralized in `src/config.ts` via `GRIPPER_CONFIG.unitScale = 1000.0`. All meshes and kinematic joint offsets are converted in a single location.
-- **"Load Gripper" Button**: In top bar, loads gripper into the scene in slate gray (`#334155`) with metallic guides. Status badge reflects active status.
-
-### 2. Tool Center Point (TCP) Frame
-- **Definition**: Origin located at the center between fingertips.
-- **Approach Axis**: $+Z$ vector points outward along approach direction (pointing into the grasp target).
-- **Visual Indicators**:
-  - Small RGB Axes Helper ($30\text{ mm}$ size).
-  - Cyan Approach Direction Arrow ($45\text{ mm}$).
-  - Tool center sphere.
-- **Configurable TCP Offset**: Distance from mounting flange to fingertip center (default $145.0\text{ mm}$), editable dynamically in the UI.
-
-### 3. Gripper Manipulation & Jogging
-- **TransformControls Gizmo**: Translate and Rotate modes attached to TCP root.
-- **Keyboard Shortcuts**: `T` for Translate mode, `R` for Rotate mode (with input guard).
-- **Two-Way Numeric Inputs**:
-  - $X, Y, Z$ coordinates in millimeters (part coordinate frame $T_{\text{part\_grasp}}$).
-  - $Roll, Pitch, Yaw$ in degrees ($XYZ$ Euler angles).
-  - Typing a value moves the gripper; dragging gizmo updates inputs in real-time.
-- **Step Jogging**:
-  - Jog buttons: $\pm X, \pm Y, \pm Z$ and $\pm Rx, \pm Ry, \pm Rz$.
-  - Adjustable step sizes: $1\text{ mm} / 1^\circ$, $5\text{ mm} / 15^\circ$, $10\text{ mm} / 45^\circ$, $25\text{ mm} / 90^\circ$.
-- **Surface Snapping & Orientation Controls**:
-  - **"Snap to Clicked Point"**: Takes the clicked surface point and face normal $\vec{N}$ on the CAD model, placing the TCP at the surface point with approach vector $+Z_{\text{approach}} = -\vec{N}$.
-  - **"Flip Approach (180°)"**: Inverts approach orientation $180^\circ$ around local $X$.
-  - **"Spin around Approach"**: $\pm 15^\circ, \pm 90^\circ$ rotations around $+Z_{\text{approach}}$.
-  - **"Reset Gripper Pose"**: Restores initial default pose centered above the CAD model.
-
-### 4. Gripper Finger Kinematics (Open / Close)
-- Range slider from $0\text{ to }85\text{ mm}$ opening width.
-- Quick action buttons: **Close (0mm)**, **Half (42.5mm)**, **Open (85mm)**.
-- Real-time numerical readout of current finger opening width.
-- Symmetrical 4-bar linkage kinematics on left and right finger groups.
-
-### 5. Interference / Collision Checking
-- Hierarchical interference detection between gripper meshes and CAD part meshes.
-- Visual feedback: Gripper highlights in warning red (`#ef4444`) on intersection.
-- Status badge: `"No collision"` (green) vs `"Collision"` (red).
-
-### 6. Animated "Test Grasp" Motion Sequence
-- Pre-grasp $\to$ Approach $\to$ Close $\to$ Lift motion cycle:
-  1. **Pre-Grasp**: Retracts along $-Z_{\text{approach}}$ by `preGraspDistance` (default $100\text{ mm}$) and opens fingers to $85\text{ mm}$.
-  2. **Approach**: Moves linearly into the target grasp pose along $+Z_{\text{approach}}$.
-  3. **Close**: Closes fingers to target opening width onto the part.
-  4. **Lift**: Retracts back to pre-grasp standoff position.
-  5. **Restore**: Automatically restores the user's editable pose and re-enables gizmos.
-- **Phase Labels**: Real-time badge display (`Pre-grasp`, `Approach`, `Close`, `Lift`, `Idle`).
-- **Stop Control**: Dedicated Stop button immediately halts animation and restores pose.
-
-### 7. Saved Grasps Management & JSON Export / Import
-- **Save Grasp Pose**: Saves grasp name, part-relative `Pose` (position $X, Y, Z$ in mm + quaternion $X, Y, Z, W$), $RPY$ Euler angles, opening width, pre-grasp distance, and TCP offset.
-- **Saved Grasps List (Left Sidebar)**:
-  - Displays all saved grasps per part.
-  - One-click restore to reposition gripper to any saved pose.
-  - Inline rename and delete actions.
-  - Persistent caching in `localStorage`.
-- **JSON Export / Import**:
-  - Conforms to cobot `Pose` schema from `src/types.ts`.
-  - Downloadable JSON blob for robot controllers.
-  - File picker to import existing grasp definitions.
-
-### 8. Viewport Floating Toolbar & Tabbed Sidebar
-- Floating toolbar over viewport for fast single-click access:
-  `Move (T)`, `Rotate (R)`, `Snap to Point`, `Flip (180°)`, `Test Grasp`, `Stop`.
-- Right sidebar tab switcher: `Gripper & Grasp` vs `CAD Properties`.
-- Clean 8px spacing, light industrial theme.
-
----
-
-## Directory Structure
 ```
-nferent_cad/
-├── index.html                  # HTML entry point with WASM script tags & font preloads
-├── package.json                # Project dependencies & scripts
-├── tsconfig.json               # TypeScript configuration
-├── vite.config.ts              # Vite configuration (with localFileServer & fs allow)
-├── public/
-│   ├── occt-import-js.wasm     # OpenCascade WebAssembly binary (7.6MB)
-│   ├── occt-import-js.js       # WASM glue script
-│   ├── gripper/                # Symlink to robotiq_2f85 assets
-│   └── samples/                # Sample CAD test models (.step, .stl, .obj)
-├── src/
-│   ├── config.ts               # Gripper config & unitScale conversion constant (1000.0)
-│   ├── main.ts                 # Application orchestration & event routing
-│   ├── types.ts                # TypeScript types (Pose, SavedGrasp, GripperState, etc.)
-│   ├── styles.css              # Industrial light-theme styling & responsive grid
-│   ├── gripper/
-│   │   ├── GripperLoader.ts    # STLLoader mesh assembly with unit scale conversion
-│   │   ├── GripperModel.ts     # TCP frame, finger kinematics, materials & helpers
-│   │   ├── GraspController.ts  # TransformControls, pose math, snapping & test sequence
-│   │   └── collision.ts        # Mesh & Box3 interference detection
-│   ├── ui/
-│   │   ├── Layout.ts           # Top bar, floating viewport toolbar, tabs & overlays
-│   │   ├── GripperPanel.ts     # Right sidebar: pose, jogging, sliders & parameters
-│   │   ├── GraspList.ts        # Left sidebar: saved grasps, export & import
-│   │   ├── PartsList.ts        # Left sidebar: CAD solid tree & view controls
-│   │   └── PropertiesPanel.ts  # Right sidebar: CAD metadata & pick-point readouts
-│   └── viewer/
-│       ├── Viewer.ts           # Three.js scene, Z-up camera, lighting, helpers & render loop
-│       ├── loaders.ts          # STEP (occt-import-js), STL & OBJ loaders
-│       └── selection.ts        # Raycasting, pick-point & face normal calculation
-└── test/
-    └── test-step2-gripper.js   # Automated end-to-end acceptance test suite
+web/        browser app (TypeScript, Three.js, Vite)        -> built to web/dist, served by the server
+server/     HTTP API + static web app (FastAPI)              -> python -m server
+cell/       simulation, grasp/motion planning, real robot    -> python -m cell.<module>
+models/     MuJoCo models of the EC66 and 2F-85, Table_base.step (Git LFS)
+cad/        Fixture.step and the part STEP files
+config/     cell.json: everything calibrated on the real cell
+tests/      pytest suite (planning, sim, real-robot safety, server); web/tests/smoke.mjs browser test
+deploy/     install script and systemd service
+var/        runtime data, git-ignored: converted-mesh cache and one folder per run (var/runs/<id>/)
 ```
 
----
+## Install (cell PC, Ubuntu)
 
-## Setup & Running Locally
+Needs miniforge (conda), Node 20 (`web/.nvmrc`), git-lfs, and an X desktop session for the MuJoCo windows.
 
-This project requires **Node.js 20 or newer**. If you use `nvm`, run `nvm install` and `nvm use` from the project directory; `.nvmrc` selects the supported version. Check the active version with `node --version` before installing or running the project.
+```bash
+git lfs install && git lfs pull           # models/Table_base.step (39 MB)
+deploy/install.sh                         # Python env 'pick-cell', web build, .env, config check, systemd service
+```
 
-1. **Install Dependencies**:
-   ```bash
-   npm install
-   ```
+Then open <http://127.0.0.1:8000>. Manage the service with `systemctl --user status|restart|stop pick-cell`; its log:
+`journalctl --user -u pick-cell -f`. Each run also has `var/runs/<id>/log.txt` and `status.json`.
 
-2. **Start Vite Development Server**:
-   ```bash
-   npm run dev
-   ```
-   Open `http://localhost:3000` in your browser.
+The 2F-85 needs access to the USB adapter: add the user to the `dialout` group (or `sudo chmod a+rw /dev/ttyUSB0`).
 
-3. **Run Typecheck & Build**:
-   ```bash
-   npm run build
-   ```
+Machine settings are in `.env` (see `.env.example`): host/port, Python, data folder, how many runs to keep, DISPLAY.
+`CELL_HOST=0.0.0.0` makes the app reachable from other PCs on the cell network. There is no login: only do that on
+a closed cell network.
 
-4. **Run End-to-End Acceptance Test**:
-   ```bash
-   node test/test-step2-gripper.js
-   ```
+## Develop
+
+```bash
+conda activate pick-cell
+python -m server                          # API on :8000 (serves web/dist if built)
+cd web && npm run dev                     # http://localhost:3000, /api forwarded to :8000
+
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest      # ~3 min, no hardware, no windows
+cd web && npm run build && npm run smoke  # browser: load part -> fixture -> mark points -> plan (SMOKE_SIM=1: + Sim)
+python -m cell.config_check               # validate config/cell.json
+```
+
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` keeps ROS's pytest plugins (from a sourced ROS `PYTHONPATH`) out of the tests.
+The server and its jobs ignore that `PYTHONPATH` already.
+
+## Using it
+
+In the **Auto Pick & Place** panel (left):
+
+1. **Load CAD** (`.step`/`.stp`, or `.stl`/`.obj` in mm). The part appears on the pick fixture as in the simulator.
+2. Click where one finger should grip, then where the other should. The surfaces decide the grip:
+   - facing away from each other (two outer sides): **outside grip**, the fingers close on the points
+   - facing each other (two sides of a bore or slot): **inside grip**, the fingers open against the points
+   - same direction, or more than 53° from opposite: refused, the fingers would slide off
+
+   The gripper goes exactly where you marked or nowhere: if the points can't be reached, the app says why.
+3. **Plan to Points**: up to three solutions, best first. Click one to show it.
+   **Step Jogging** (Gripper tab) or **Pick Offset** after planning, then Plan again: the arm plans to exactly that
+   gripper pose, or the app says why it can't.
+4. **Preview Here** / **Preview Robot** (MuJoCo, no physics), then **Sim** (full physics). Sim reports how close each
+   finger came to its point. Running Sim to the end enables **Real Sim** for that plan.
+5. **Go Home (real robot)**, then **Real Sim**. **Stop** (or closing the MuJoCo window) sends `stop` to the robot.
+   Keep a hand on the E-stop.
+
+### Grasp test or full pick & place
+
+`config/cell.json` → `grasp_test.enabled`:
+
+- `true`: go to the pick point, wait `wait_before_close_s` (5 s), close on the part in the fixture, hold
+  `hold_closed_s` (10 s), open, back out along the approach line, go home. The part stays in the fixture.
+  This is for measuring the sim-to-real gap.
+- `false`: pick, lift `lift_height_m`, carry to the tray at `place_xy`, release and go home.
+
+### Parts and the fixture
+
+`pick_station` in `config/cell.json`: `Fixture.step` is bolted over the corner hole near `near_xy`.
+With `seat_all_parts: true`, every part is placed on it by its CAD coordinates, so **each part's STEP must be
+exported in the fixture's coordinate frame** (e.g. from the assembly with the fixture). A part that would float above
+the fixture or sit below the table is refused with a message saying so. The part's turn about the vertical axis
+from the Part Pose tab is kept; tilting it is refused. The fixture holds the part until the gripper has closed.
+
+### Real robot
+
+- EC66 controller at `192.168.1.200` (JSON-RPC port 8055), pendant in **REMOTE** mode, robot stopped (no alarm).
+  IP `fake` in the panel runs everything against a simulated robot.
+- Speed 1–10 % (hard cap 10 %). Before moving, the whole path is checked: joint limits, no joint turning more
+  than 120° in one move, wrist and TCP clear of the table and the pendant holder. Joints a whole turn away from
+  the plan (e.g. J5 271° vs −89°) are kept on the robot's current turn.
+- Every waypoint must be reached within 1°, or the run stops. Every stop is logged (`real_stops` in the run's
+  `status.json`): target vs reached joints, error and time. The real gripper's closed width (and whether it felt the
+  part) is also logged, for comparing sim and real.
+- **Real gripper (2F-85 on USB)** box: `real_gripper` in the config (port, speed 64, force 50). Without it the gripper
+  only moves in the sim.
+- `debug_pause_at_pick_s` (config): full pick & place only, a pause at the pick point before closing (0 = off).
+
+## Calibration (`config/cell.json`)
+
+| key | what | how |
+|---|---|---|
+| `pick_motion.home_joints_deg.ec66` | home pose (pendant degrees) | read from the robot at the wanted pose |
+| `robot_base_offset_mm.ec66` | real robot base vs the table CAD, mm | `python -m cell.calibrate_robot` (below) |
+| `gripper_coupling_mm.ec66.2f85` | coupling plate flange → gripper (22 mm) | measured |
+| `pick_station.near_xy`, `yaw_deg` | where the fixture is bolted | table hole grid |
+| `place_xy` | tray centre | measured |
+
+Base offset: `python -m cell.calibrate_robot --close-gripper`. Then jog the closed fingertips onto the centre of big
+table hole (15, 0) with the pendant, and run `python -m cell.calibrate_robot` (reads the joints, prints the error).
+`--write` saves the correction. Check at a second hole (`--hole 2 12`): both should be within 1–2 mm. Plan again
+afterwards. `python -m cell.show_locations` prints where the pick and drop are on the table.
+
+The server checks `config/cell.json` at start-up (`cell/config_check.py`) and does not start on a bad value.
+
+## How it works
+
+- `cell/cad_pick_place.py`: the scene (EC66 + 2F-85 + table + tray + fixture + part), stepping, viewer, ghost
+  gripper. `step_to_mesh.py` converts STEP files to meshes and convex collision pieces (CoACD), cached in
+  `var/cache/` (first run of a part: ~30 s).
+- `cell/auto_pick_place.py`: the job entry point (`--mode plan|preview|execute|real|home`), grasp from the two points
+  (`grasp_planner.py`, `gripper_geometry.py`), motion (`ik.py`, `motion_planner.py`: straight TCP lines and
+  RRT-Connect), collision checks against the physics shapes (`collision_check.py`).
+- `cell/real_robot.py`, `cell/real_gripper.py`: the EC66 client, waypoint reduction, safety checks, the 2F-85 on
+  Modbus RTU.
+- Frames (`cell/frames.py`): the web tool and MuJoCo use the same part frame (STEP native, mm in the web, m in MuJoCo)
+  and the same TCP (+Z approach, X closing). `T_world_tcp = T_world_part · T_part_tcp`.
+- `server/`: one job at a time as a child process (`python -m cell.auto_pick_place ...`). Stop = SIGTERM; in real
+  mode the job then sends `stop` to the robot. Run folders beyond `CELL_KEEP_RUNS` are deleted.
+
+## Troubleshooting
+
+| message | meaning |
+|---|---|
+| `The robot is in TEACH mode` | switch the pendant to REMOTE |
+| `Real move refused ... a joint would turn N deg` | the robot is far from home: press Go Home first |
+| `The robot stopped N deg away from ...` | the robot did not reach a waypoint (blocked, or stopped from the pendant) |
+| `The gripper did not finish ...` | 2F-85 not responding: check USB, power, port permission |
+| `... not drawn in the fixture's coordinate frame` | export the part's STEP in the fixture's frame |
+| `The two surfaces face the same way` | mark points on opposite faces (two sides of a wall or bore) |
+| `config/cell.json has problems` | the server lists the bad keys; fix them and restart |

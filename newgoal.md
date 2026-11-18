@@ -1,5 +1,15 @@
 # New goal: production stack for the CAD pick cell (web + MuJoCo sim + real EC66)
 
+> **Status 2026-11-18: done** on branch `chore/production-stack` (one commit per step). Two acceptance items are
+> left for you, at the cell: deploy/install.sh on the cell PC, and acceptance 8, one Real Sim grasp test on the
+> real EC66 at 5 % speed. Decisions taken: camera scan removed; inspection camera stage and its post removed;
+> grasp test and full pick & place both kept (`grasp_test.enabled`); manual Save Grasp → Simulate flow removed;
+> EC66 + 2F-85 only.
+> Deviations from the plan below:
+> - `cell/` is one flat package (no sim/planning/robot sub-packages).
+> - The CAD files live in `cad/` and `config/` holds only `cell.json`.
+> - Removed and ignored data was moved to `~/Cad_project_archive/2026-11-18/` (not deleted).
+
 > Paste everything below the line as the prompt for the clean-up work.
 > Written 2026-11-18 from a full scan of `~/Cad_project` (branch `feature/mujoco-sim-recording-hande`).
 
