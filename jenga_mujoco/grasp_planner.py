@@ -46,6 +46,9 @@ class GraspParams:
     n_refine: int = 250             # candidates measured with the full pad footprint
     modes: tuple = ('outside', 'inside')
     n_return: int = 40
+    # Marked points: where along the finger they land. 'tip' = near the fingertip end of the pad, so the gripper
+    # goes no deeper than needed; 'center' = the middle of the pad (deeper, more grip area).
+    point_on_pad: str = 'tip'
 
 
 @dataclass
@@ -451,7 +454,9 @@ def grasps_from_points(vertices, faces, points, T_world_part, geo, params=None, 
             base = 0.0
             if low < table_z + params.table_clearance_m and vertical > 0.05:
                 base = (table_z + params.table_clearance_m - low) / vertical
-            for k in (0.0, 0.4, 0.8, -0.4, -0.8):
+            # shift > 0 moves the gripper back along the approach: the points move toward the fingertip end.
+            ks = (0.8, 0.4, 0.0, -0.4, -0.8) if params.point_on_pad == 'tip' else (0.0, 0.4, 0.8, -0.4, -0.8)
+            for k in ks:
                 shift = base + k * pad.half_z
                 if abs(shift) + off_z > 0.95 * pad.half_z:
                     continue
@@ -478,7 +483,8 @@ def grasps_from_points(vertices, faces, points, T_world_part, geo, params=None, 
                         hold = width_mm
                 else:
                     hold = width_mm
-                score = 3.0 * vertical ** 2 - abs(shift) / pad.half_z
+                depth = (shift / pad.half_z) if params.point_on_pad == 'tip' else -abs(shift) / pad.half_z
+                score = 3.0 * vertical ** 2 + depth
                 out.append(Candidate(T, hold, mode, (p1, p2), score, dict(vertical=vertical)))
     out.sort(key=lambda c: -c.score)
     return _diverse(out, params.n_return), rejects, note

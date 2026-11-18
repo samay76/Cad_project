@@ -116,7 +116,8 @@ CASES = [
     # Clicking the outside of a tube the gripper can span: both fingers outside, across the diameter.
     ('sleeve_outer_2f85', ring(25.3, 17.85, 39), (25.3, 0, 20), (1, 0, 0), '2f85', 'cs66', 'tray:outside'),
     ('ring_outer_wall_2f85', ring(45, 30, 25), (45, 0, 12), (1, 0, 0), '2f85', 'cs66', 'tray:inside'),
-    ('wide_ring_2f85', ring(70, 40, 25), (40, 0, 12), (-1, 0, 0), '2f85', 'cs66', 'plan-fails'),
+    # 140 mm across: bigger than the original tray, so the tray grows to fit it (sim_config tray_margin_m).
+    ('wide_ring_2f85', ring(70, 40, 25), (40, 0, 12), (-1, 0, 0), '2f85', 'cs66', 'tray:inside'),
     ('ring_inside_only_2f85', ring(45, 28, 30), (28, 0, 15), (-1, 0, 0), '2f85', 'cs66', 'tray', {'modes': ['inside']}),
     ('ring_inside_only_hande', ring(45, 28, 30), (28, 0, 15), (-1, 0, 0), 'hande', 'cs66', 'tray', {'modes': ['inside']}),
     ('too_wide_cube', box(300, 300, 300), (150, 150, 300), (0, 0, 1), '2f85', 'cs66', 'plan-fails'),

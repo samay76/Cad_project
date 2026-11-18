@@ -1,10 +1,13 @@
 import mujoco
 import numpy as np
 
+from table_base import add_table
+
 G = mujoco.mjtGeom
 
 # Default task coordinates
 TARGET_BOX_POS = np.array([0.55, 0.15, 0.0])
+TRAY_HALF = (0.065, 0.050)  # inner half-size of the target tray (m); CAD parts may get a bigger one
 JENGA_INITIAL_POS = np.array([0.45, -0.10, 0.01])
 
 
@@ -26,35 +29,29 @@ WOOD_COLORS = [
 ]
 
 
-def add_world(spec, add_box=True, add_block=True, num_blocks=1):
+def add_world(spec, add_box=True, add_block=True, num_blocks=1, tray_half=TRAY_HALF, pick_station=None):
     """Floor, table, target placement box, dynamic Jenga blocks and lighting.
     
-    Table top surface is at z=0.
+    Table top surface is at z=0; the robot base stands on the mounting plate at z=MOUNT_PLATE_TOP_Z.
     """
     w = spec.worldbody
 
-    # 1. Floor & Table
-    w.add_geom(name='floor', type=G.mjGEOM_PLANE, size=[3, 3, 0.05],
-               pos=[0, 0, -0.75], rgba=[0.55, 0.55, 0.55, 1])
-
-    w.add_geom(name='table_top', type=G.mjGEOM_BOX, size=[0.6, 0.4, 0.02],
-               pos=[0.3, 0, -0.02], rgba=[0.75, 0.6, 0.45, 1],
-               friction=[1.0, 0.005, 0.0001])
-
-    legs = [(-0.25, -0.35), (-0.25, 0.35), (0.85, -0.35), (0.85, 0.35)]
-    for i, (x, y) in enumerate(legs):
-        w.add_geom(name=f'leg{i}', type=G.mjGEOM_BOX, size=[0.025, 0.025, 0.365],
-                   pos=[x, y, -0.395], rgba=[0.4, 0.3, 0.2, 1])
+    # 1. Floor & Table (Table_base.step; the arm stands on its mounting plate, see table_base.py)
+    add_table(spec)
+    if pick_station is not None:  # (info, placement) from pick_station.from_config
+        from pick_station import add_to_spec
+        add_to_spec(spec, *pick_station)
 
     # 2. Taped boundary marking on table (yellow flat tape)
-    w.add_geom(name='boundary', type=G.mjGEOM_BOX, size=[0.09, 0.07, 0.0005],
+    w.add_geom(name='boundary', type=G.mjGEOM_BOX, size=[tray_half[0] + 0.025, tray_half[1] + 0.020, 0.0005],
                pos=[0.55, 0.15, 0.0005], rgba=[1.0, 0.88, 0.15, 1],
                contype=0, conaffinity=0)
 
     # 3. Target Placement Box (receptacle tray with walls)
     if add_box:
         bx, by = TARGET_BOX_POS[0], TARGET_BOX_POS[1]
-        bw, bl, bh = 0.065, 0.050, 0.003
+        bw, bl = tray_half
+        bh = 0.003
         wall_th = 0.003
         wall_h = 0.012
 

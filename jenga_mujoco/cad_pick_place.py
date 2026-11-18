@@ -11,7 +11,7 @@ Launched by the web app's "Simulate in MuJoCo" button (vite-plugins/mujocoBridge
 
 Sequence: settle part on table -> preview ghost gripper at the taught grasp -> plan (IK + collision
 checks for every waypoint, abort with a clear error if anything is unreachable/colliding) ->
-approach -> grip -> lift -> inspection (part shown to a camera on the table in several positions,
+turn the gripper at home -> straight to the start of the approach -> approach (slow) -> grip -> lift -> inspection (part shown to a camera on the table in several positions,
 images saved) -> transfer -> place in tray -> release -> retreat.
 
 The approach is the path the user taught (see taught_path.py): either the straight pre-grasp ->
@@ -37,9 +37,11 @@ from frames import (make_T, inv, T_to_pos_quat, web_pose_to_T, T_gbase_tcp, quat
                     body_T, site_T, pose_error)
 from ik import solve as ik_solve, N_ARM
 from robots import get_robot, ROBOTS
-from step_to_mesh import convert
+from step_to_mesh import convert, is_mesh_file
 from cad_part import PART_BODY
 from taught_path import from_grasp, densify, path_length
+from motion_planner import joint_path_length
+from pick_station import from_config as from_station_config, is_seated_part, seated_pose, release_weld, drop_payload
 from cameras import add_inspection_camera, CAM_INSPECTION
 from camera_feed import CameraFeed
 
@@ -48,10 +50,28 @@ TCP_SITE = 'g_tcp'
 GRIP_OPEN, GRIP_CLOSED = 0.0, 255.0
 GRIPPER_NAMES = {'2f85': 'Robotiq 2F-85', 'hande': 'Robotiq Hand-E'}
 GRIPPER_OPEN_MM = {'2f85': 85.0, 'hande': 50.0}
+# How the arm goes to pick (sim_config.json "pick_motion" overrides these). Speeds are peak values.
+PICK_MOTION_DEFAULTS = {
+    'home_tcp_m': [0.40, 0.0, 0.40],  # home: gripper pointing straight down, up over the middle of the table
+    'orient_first': True,             # turn the gripper at home, then travel without turning
+    'orient_speed_rad_s': 0.5,        # joint speed while the gripper turns at home
+    'travel_speed_m_s': 0.12,         # TCP speed from home to the pre-grasp
+    'approach_speed_m_s': 0.03,       # TCP speed of the final approach onto the part
+    'grip_seconds': 1.5,              # closing (or opening, inside grips) the fingers
+    'lift_speed_m_s': 0.04,           # TCP speed lifting the part off the table
+}
 FINGER_JOINTS = ['g_left_driver_joint', 'g_left_spring_link_joint', 'g_left_follower',
                  'g_right_driver_joint', 'g_right_spring_link_joint', 'g_right_follower_joint']
 GHOST_RGBA_OK = [0.1, 0.85, 0.35, 0.35]
 GHOST_RGBA_BAD = [0.95, 0.15, 0.15, 0.45]
+
+
+def robot_base_offset(cfg, robot_id):
+    """Calibration (x, y, z mm) of the real robot base vs the table CAD: sim_config.json robot_base_offset_mm."""
+    v = (cfg.get('robot_base_offset_mm') or {}).get(robot_id)
+    if v is None:
+        return (0.0, 0.0, float((cfg.get('robot_height_offset_mm') or {}).get(robot_id, 0.0)))   # older config key
+    return tuple(float(x) for x in v)
 
 
 class PlanError(Exception):
@@ -188,6 +208,18 @@ def add_ghost(spec, ghost_geoms, T_gb_tcp):
 # --------------------------------------------------------------------------------------------
 # Simulation runner
 # --------------------------------------------------------------------------------------------
+
+def tray_half_for(verts_w, com_w, cfg):
+    """Inner half-size (x, y) of the target tray, in m, for a part with these (world-oriented) vertices.
+
+    The part is placed with its centre of mass over place_xy, turned about the vertical by 0 or 90 deg first,
+    so the tray is a square that holds the footprint's farthest X or Y extent from the COM, plus a margin.
+    Parts that fit the original tray keep it (TRAY_HALF), so existing results do not change."""
+    from world import TRAY_HALF
+    reach = np.abs(verts_w[:, :2] - com_w[:2]).max()
+    need = reach + float(cfg.get('tray_margin_m', 0.012))
+    return (max(TRAY_HALF[0], need), max(TRAY_HALF[1], need)) if need > min(TRAY_HALF) else tuple(TRAY_HALF)
+
 class CadPickPlace:
     def __init__(self, step_path, grasp, part_world_quat_wxyz, cfg, status, headless=False, snapshots=None,
                  feed_dir=None, robot=None):
@@ -207,7 +239,13 @@ class CadPickPlace:
         self.speed = float(cfg.get('speed', 1.0))
 
         status.update('converting', f'Converting {os.path.basename(step_path)} to meshes (cached after first run)...')
-        self.meta = convert(step_path, density=cfg.get('density_kg_m3', 7850))
+        # A mesh part (STL/OBJ, e.g. a camera scan, filled solid) has no known material: it gets its own density.
+        density = (cfg.get('mesh_density_kg_m3', 2700) if is_mesh_file(step_path) else cfg.get('density_kg_m3', 7850))
+        # Collision shape quality (sim_config collision_hulls): more, finer convex pieces keep cavities such as
+        # a cup open, so a finger planned inside one is not reported as hitting the part.
+        hulls = cfg.get('collision_hulls') or {}
+        self.meta = convert(step_path, density=density, max_hulls=int(hulls.get('max_hulls', 24)),
+                            threshold=float(hulls.get('threshold', 0.04)))
         status.info['part'] = {k: self.meta[k] for k in ('bbox_mm', 'mass_kg', 'volume_m3')}
         status.info['part']['hulls'] = len(self.meta['collision_hulls'])
 
@@ -231,16 +269,67 @@ class CadPickPlace:
         R = make_T([0, 0, 0], part_world_quat_wxyz)[:3, :3]
         rv = self.part_verts @ R.T
         c = (rv.min(0) + rv.max(0)) / 2
+        # Pick station (sim_config pick_station): the part sits on its column, centre of mass over the axis.
+        try:
+            self.station = from_station_config(cfg)
+        except (OSError, RuntimeError, ValueError) as e:
+            raise PlanError(f'Pick station: {e}') from None
+        self.support_z = 0.0
+        if self.station[1] is not None:
+            placement = self.station[1]
+            cfg['pick_xy'] = placement['pick_xy']
+            self.support_z = placement['support_z']
+            c = R @ np.asarray(self.meta['com_m'])
+            status.info['pick_station'] = {'pick_xy_mm': [round(v * 1000, 1) for v in placement['pick_xy']],
+                                           'top_mm': round(self.support_z * 1000, 1),
+                                           'hole_error_mm': placement['hole_error_mm']}
         px, py = cfg['pick_xy']
-        part_pos = [px - c[0], py - c[1], -rv.min(0)[2] + 0.002]
+        part_pos = [px - c[0], py - c[1], self.support_z - rv.min(0)[2] + 0.002]
+        # Fixture: the part made for it (pick_station.seated_part) goes on it as the two STEPs fit together, held
+        # there by a weld until the gripper has closed. The orientation from the web viewer does not apply.
+        self.seated = self.station[1] is not None and is_seated_part(self.station[1], step_path)
+        if self.seated:
+            # The part can only turn about the fixture axis (Z): that turn, from the web view, is kept.
+            R_web = make_T([0, 0, 0], part_world_quat_wxyz)[:3, :3]
+            tilt = float(np.degrees(np.arccos(np.clip(R_web[2, 2], -1.0, 1.0))))
+            if tilt > 2.0:
+                raise PlanError(f'The part is tilted {tilt:.0f} deg in the view, but on the fixture it can only turn '
+                                'about the vertical (Z) axis. Reset its X/Y rotation in the Part Pose tab.')
+            part_yaw = float(np.degrees(np.arctan2(R_web[1, 0], R_web[0, 0])))
+            self.station = (self.station[0], dict(self.station[1], part_yaw_deg=part_yaw))
+            part_pos, q_seat = seated_pose(self.station[1])
+            part_world_quat_wxyz = np.asarray(q_seat)
+            R = make_T([0, 0, 0], part_world_quat_wxyz)[:3, :3]
+            rv = self.part_verts @ R.T
+            self._check_seat_fit(part_pos, rv, self.station[1], status)
+            # The grasp planner keeps the fingertips above this: here it is the real table top. The fixture is
+            # in the collision check, and under an overhang of the part there is free space down to the table.
+            self.support_z = 0.0
+            status.info['pick_station']['seated_part'] = True
+            status.info['pick_station']['part_yaw_deg'] = round(part_yaw, 1)
+            print('Fixture: the part is seated on it (CAD fit), held until the gripper closes.', flush=True)
+
+
+        self.tray_half = tray_half_for(rv, R @ np.asarray(self.meta['com_m']), cfg)
+        status.info['tray_mm'] = [round(2000 * h) for h in self.tray_half]
 
         status.update('building', f'Building MuJoCo scene ({self.robot.label} + {GRIPPER_NAMES[self.gripper]} + part)...')
         build_kw = dict(obj='cad_part', cad_meta=self.meta, part_pos=part_pos, part_quat=part_world_quat_wxyz,
+                        tray_half=self.tray_half,
                         tcp_offset_mm=self.tcp_offset_mm, gravcomp=True, fine_fingers=True, gripper=self.gripper,
-                        include_sensor_cameras=False, robot=self.robot.id)
+                        include_sensor_cameras=False, robot=self.robot.id,
+                        pick_station=(*self.station, self.seated) if self.station[1] is not None else None,
+                        coupling_mm=float((cfg.get('gripper_coupling_mm') or {}).get(self.robot.id, {})
+                                          .get(self.gripper, 0.0)),
+                        base_offset_mm=robot_base_offset(cfg, self.robot.id))
         model0 = build(**build_kw)
         self.fingers = finger_map(model0, self.gripper, self.home)
-        ghost_geoms = collect_ghost_geoms(model0, self.fingers, self.path.pre_grip_width, self.home)
+        # The ghost shows the gripper as it grips: fingers at the contact width, not at the (wider) opening
+        # used on the way in, so it looks like the real gripper once the fingers have closed on the part.
+        ghost_width = grasp.get('measuredGraspWidth')
+        if ghost_width is None or not np.isfinite(float(ghost_width)) or float(ghost_width) <= 0:
+            ghost_width = self.path.pre_grip_width
+        ghost_geoms = collect_ghost_geoms(model0, self.fingers, float(ghost_width), self.home)
         def extra(s):
             add_ghost(s, ghost_geoms, self.T_gb_tcp)
             if self.insp.get('enabled'):
@@ -263,12 +352,80 @@ class CadPickPlace:
         self.ignore_env_bodies = {m.body(b).id for b in self.robot.base_bodies}
         self.pad_geoms = {g for g in range(m.ngeom) if m.geom(g).name.startswith(('g_left_pad', 'g_right_pad'))}
 
+        self.pick = {**PICK_MOTION_DEFAULTS, **(cfg.get('pick_motion') or {})}
+        self.home, self.T_home = self._central_home()
+
         self.data.qpos[:N_ARM] = self.home
         self.data.ctrl[:N_ARM] = self.home
         self.data.ctrl[self.grip_act] = GRIP_OPEN
         mujoco.mj_forward(m, self.data)
         self.path_points = []  # taught TCP path in world (drawn as dots)
         self.transfer_T = None  # TCP path inspection -> tray (plan_transfer)
+
+    @staticmethod
+    def _check_seat_fit(part_pos, rv, placement, status):
+        """A part seated by its CAD frame must have been drawn in the fixture's frame. If its STEP has another
+        origin it ends up floating over the fixture or sunk into the table: refuse with a clear message."""
+        low = float(part_pos[2] + rv.min(0)[2])            # lowest point of the part, m above the table
+        top = float(placement['support_z'])                # fixture top, m above the table
+        status.info['pick_station']['part_low_mm'] = round(low * 1000, 1)
+        if low < -0.002:
+            raise PlanError(f'On the fixture this part would reach {-low * 1000:.0f} mm below the table top: its STEP '
+                            'is not drawn in the fixture\'s coordinate frame. Export it from the assembly with the '
+                            'fixture (same origin), or set pick_station.seat_all_parts to false.')
+        if low > top + 0.003:
+            raise PlanError(f'On the fixture this part would float {(low - top) * 1000:.0f} mm above the fixture top: its '
+                            'STEP is not drawn in the fixture\'s coordinate frame. Export it from the assembly with the '
+                            'fixture (same origin), or set pick_station.seat_all_parts to false.')
+
+    def _central_home(self):
+        """Home posture with the TCP at pick_motion.home_tcp_m, pointing straight down (the robot's own home
+        posture seeds the IK, so the arm keeps its configuration). Falls back to that posture if unreachable."""
+        m, s = self.model, self.scratch
+        fixed = (self.pick.get('home_joints_deg') or {}).get(self.robot.id)
+        if fixed:  # a home taught on the real robot (joint angles in degrees, as the pendant shows them)
+            q = np.radians(np.asarray(fixed, dtype=float))
+            s.qpos[:N_ARM] = q
+            mujoco.mj_kinematics(m, s)
+            return q, site_T(m, s, TCP_SITE)
+        s.qpos[:N_ARM] = self.robot.home_qpos
+        mujoco.mj_kinematics(m, s)
+        T0 = site_T(m, s, TCP_SITE)
+        z = np.array([0.0, 0.0, -1.0])
+        x = T0[:3, 0] - (T0[:3, 0] @ z) * z
+        x /= np.linalg.norm(x)
+        T = np.eye(4)
+        T[:3, :3] = np.column_stack([x, np.cross(z, x), z])
+        T[:3, 3] = self.pick['home_tcp_m']
+        r = ik_solve(m, s, TCP_SITE, T, [self.robot.home_qpos])
+        if not r.ok:
+            print(f"Home TCP {self.pick['home_tcp_m']} is out of reach; using the robot's default home.", flush=True)
+            return self.robot.home_qpos, T0
+        return r.q, T
+
+    def check_on_support(self, T_wp):
+        """Raises PlanError when the settled part is no longer on the pick station (or table)."""
+        if self.station[1] is None:
+            if T_wp[2, 3] < -0.05:
+                raise PlanError('The part rolled off the table while settling. Rotate it in the Part Pose tab '
+                                'so it lies stably, then try again.')
+            return
+        com = T_wp[:3, :3] @ np.asarray(self.meta['com_m']) + T_wp[:3, 3]
+        if T_wp[2, 3] > self.support_z - 0.05:   # still on it (a cup may rest with the column in its cavity)
+            return
+        info = self.station[0]
+        column_d = 2 * info['column_radius_mm']
+        if np.linalg.norm(com[:2] - np.asarray(self.cfg['pick_xy'])) < info['column_radius_mm'] / 1000.0:
+            raise PlanError(f'The part slid down over the pick station column: its opening is wider than the '
+                            f'column (Ø{column_d:.0f} mm). Turn it so it rests on the column top, or use a station '
+                            f'with a wider top.')
+        raise PlanError(f'The part fell off the pick station while settling: it cannot balance on the '
+                        f'Ø{column_d:.0f} mm column top in this orientation. Rotate it in the Part Pose tab so a '
+                        f'flat face rests on the column, then try again.')
+
+    def pick_seconds(self, dist_m, speed_key, minimum=1.0):
+        """Duration of a TCP move under cosine time scaling (peaks at pi/2 x the mean speed)."""
+        return float(max(minimum, np.pi / 2 * dist_m / float(self.pick[speed_key])))
 
     # ---------------- stepping / display ----------------
     def open_viewer(self):
@@ -533,9 +690,31 @@ class CadPickPlace:
         for i, q in enumerate(q_down[-3:]):
             self.check_collisions(f'place ({i + 1}/3)', q, check_part=False, width_mm=path.pre_grip_width)
 
-        return dict(inspect=inspect, inspect_skipped=skipped, transfer=q_transfer,
+        orient, travel = self.plan_orient_then_travel(q_start, Ts_w[0], ws[0])
+        return dict(inspect=inspect, inspect_skipped=skipped, transfer=q_transfer, orient=orient, travel=travel,
                     start=q_start, approach=q_approach, approach_w=ws[1:], approach_T=Ts_w,
                     lift=q_lift, above=q_above, down=q_down, retreat=q_retreat, retreat_w=rev_w, retreat_T=rev_T)
+
+    def plan_orient_then_travel(self, q_start, T_start, width_mm):
+        """Home -> gripper turned in place to the start orientation -> straight line to the start, without
+        turning (motion_planner.orient_then_travel). (None, None) when off or blocked: then the arm moves
+        straight from home in joint space, and the gripper turns on the way."""
+        if not self.pick['orient_first']:
+            return None, None
+        from motion_planner import MotionError, MotionPlanner
+
+        def free(q):
+            try:
+                self.check_collisions('move to the pre-grasp', q, width_mm=width_mm)
+                return True
+            except PlanError:
+                return False
+        try:
+            return MotionPlanner(self.model, self.scratch, TCP_SITE).orient_then_travel(
+                self.home, self.T_home, q_start, T_start, free)
+        except MotionError as e:
+            print(f'Turning the gripper at home first is not possible ({e}); moving directly.', flush=True)
+            return None, None
 
     def plan_inspection(self, T_wp, q_seed, width_mm):
         """Arm motions that hold the part's COM at the inspection point and turn it through the configured
@@ -705,6 +884,7 @@ class CadPickPlace:
         self.set_ghost(np.eye(4) @ make_T([0, 0, -5], [1, 0, 0, 0]))  # parked out of view while settling
         self.step(cfg['settle_seconds'])
         T_wp = self.part_T()
+        self.check_on_support(T_wp)
         drift = np.linalg.norm(T_wp[:2, 3] - np.asarray(self.cfg['pick_xy'])) * 1000
         st.info['part_settled_pose'] = {'pos_m': T_wp[:3, 3].round(4).tolist(),
                                         'quat_wxyz': T_to_pos_quat(T_wp)[1].round(4).tolist()}
@@ -725,16 +905,27 @@ class CadPickPlace:
         self.step(cfg['preview_seconds'])
 
         path, fm = self.path, self.fingers
-        if path.recorded:
-            self.phase('start', 'Moving to where your recording starts...')
+        to_start = (('start', 'Moving to where your recording starts...') if path.recorded else
+                    ('pre-grasp', f'Moving to pre-grasp ({self.pre_mm:.0f} mm back along the approach axis)...'))
+        if plan['orient'] is not None:
+            if joint_path_length([self.home, *plan['orient']]) > 0.02:
+                self.phase('orient', 'Turning the gripper to the grasp orientation at home...')
+                self.move(plan['orient'], max(1.5, np.pi / 2 * joint_path_length(plan['orient'])
+                                              / float(self.pick['orient_speed_rad_s'])), fm.ctrl_for(path.widths[0]))
+            self.phase(*to_start)
+            travel_m = float(np.linalg.norm(plan['approach_T'][0][:3, 3] - self.T_home[:3, 3]))
+            self.move(plan['travel'], self.pick_seconds(travel_m, 'travel_speed_m_s', 1.5),
+                      fm.ctrl_for(path.widths[0]))
         else:
-            self.phase('pre-grasp', f'Moving to pre-grasp ({self.pre_mm:.0f} mm back along the approach axis)...')
-        self.move([plan['start']], 2.5, fm.ctrl_for(path.widths[0]))
+            self.phase(*to_start)
+            self.move([plan['start']], 2.5, fm.ctrl_for(path.widths[0]))
         if path.recorded:
             self.phase('approach', f'Replaying your recorded motion ({len(plan["approach"])} poses)...')
         else:
             self.phase('approach', 'Approaching along the TCP +Z axis...')
-        self.move(plan['approach'], self.path_seconds(plan['approach_T'], 2.0),
+        approach_m = path_length(plan['approach_T'])[0]
+        self.move(plan['approach'], max(self.path_seconds(plan['approach_T'], 2.0),
+                                        self.pick_seconds(approach_m, 'approach_speed_m_s', 2.0)),
                   [fm.ctrl_for(w) for w in plan['approach_w']])
         self.step(0.4)
 
@@ -749,13 +940,14 @@ class CadPickPlace:
         grip_ctrl = GRIP_OPEN if inside else GRIP_CLOSED  # drive until the force limit stops the fingers
         self.phase('grip', (f'Opening the fingers against the inside of the part' if inside else 'Closing the gripper')
                    + f' (TCP vs taught grasp: {e_mm:.1f} mm / {e_deg:.1f} deg)...')
-        self.move([plan['approach'][-1]], 1.0, grip_ctrl)
+        self.move([plan['approach'][-1]], float(self.pick['grip_seconds']), grip_ctrl)
+        release_weld(self.model, self.data)   # fixture: the gripper holds the part now
         self.step(0.6)
         T_tcp_part0 = inv(site_T(self.model, self.data, TCP_SITE)) @ self.part_T()
         z0 = self.part_T()[2, 3]
 
         self.phase('lift', 'Lifting the part...')
-        self.move(plan['lift'], 2.0, grip_ctrl)
+        self.move(plan['lift'], self.pick_seconds(cfg['lift_height_m'], 'lift_speed_m_s', 2.0), grip_ctrl)
         self.step(0.3)
         self.snapshot('03_lifted')
         lifted = self.part_T()[2, 3] - z0
@@ -800,6 +992,7 @@ class CadPickPlace:
         self.phase('place', 'Lowering into the tray...')
         self.move(plan['down'], 2.0, grip_ctrl)
         self.phase('release', f'Releasing: fingers back to {path.pre_grip_width:.0f} mm (as before the grip)...')
+        drop_payload(self.model)
         self.move([plan['down'][-1]], 1.0, fm.ctrl_for(path.pre_grip_width))
         self.step(0.4)
         self.phase('retreat', 'Retreating along your taught path in reverse...' if path.recorded else 'Retreating...')
@@ -811,7 +1004,8 @@ class CadPickPlace:
 
         T_end = self.part_T()
         px, py = cfg['place_xy']
-        in_tray = abs(T_end[0, 3] - px) < 0.065 and abs(T_end[1, 3] - py) < 0.05 and self.part_min_z(T_end) < 0.03
+        in_tray = (abs(T_end[0, 3] - px) < self.tray_half[0] and abs(T_end[1, 3] - py) < self.tray_half[1]
+                   and self.part_min_z(T_end) < 0.03)
         st.info['part_in_tray'] = bool(in_tray)
         summary = (f"{'Part placed in the tray' if in_tray else 'Part was NOT placed in the tray'}. "
                    f"TCP vs taught grasp: {e_mm:.1f} mm / {e_deg:.1f} deg. "

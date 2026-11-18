@@ -18,6 +18,7 @@ const CUE_RADIUS_MM = 11; // about half a finger pad's width on both grippers
 export const POINT_COLORS = ['#f97316', '#a855f7'];
 
 const PHASE_COLORS: Record<string, number> = {
+  orient: 0x0ea5e9,
   'pre-grasp': 0x3b82f6,
   approach: 0x22c55e,
   lift: 0xf97316,
@@ -314,4 +315,4 @@ export class AutoPickPreview {
 
 /** Opening the fingers end at when gripping: on the part, or against the walls for an inside grip. */
 export const gripWidth = (plan: GraspPlan) =>
-  plan.mode === 'outside' ? plan.widthMm : plan.phases.find((ph) => ph.name === 'lift')!.width;
+  plan.mode === 'outside' ? plan.widthMm : plan.phases.find((ph) => ph.name === 'lift' || ph.name === 'hold')!.width;

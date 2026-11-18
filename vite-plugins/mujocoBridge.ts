@@ -21,6 +21,13 @@
  * POST /api/mujoco/auto/run   { runId, candidate, mode: 'preview' | 'execute' }
  *   -> opens the MuJoCo window for that plan; poll /api/mujoco/status again.
  *
+ * POST /api/mujoco/auto/real  { runId, candidate, robotIp, robotSrc?, speed, gripper?: boolean, action?: 'real' | 'home' }
+ *   gripper: drive the real Robotiq 2F-85 on USB during Real Sim (sim_config.json real_gripper)
+ *   ("Real Sim", or "Go Home": only bring the robot to the plan's home pose)
+ *   -> moves the real Elite EC66 through the plan's joints (auto_pick_place.py --mode real, real_robot.py),
+ *      the MuJoCo window following it live. robotIp 'fake' = simulated robot.
+ * POST /api/mujoco/stop  -> SIGTERM to the running simulator; in real mode that sends `stop` to the robot.
+ *
  * Python interpreter: $MUJOCO_PYTHON, default ~/miniforge3/envs/mujoco_cad/bin/python.
  */
 import type { Plugin } from 'vite';
@@ -194,7 +201,14 @@ export function mujocoBridgePlugin(): Plugin {
                   gripperId: body.gripperId,
                   tcpOffset: body.tcpOffset,
                   preGraspDistance: body.preGraspDistance,
-                  points
+                  points,
+                  pickOffsetMm: isFiniteVec(body?.pickOffsetMm) ? body.pickOffsetMm : { x: 0, y: 0, z: 0 },
+                  // gripper pose set in the 3D view (Step Jogging): planned exactly, part frame mm, quaternion xyzw
+                  graspPose:
+                    isFiniteVec(body?.graspPose?.position) &&
+                    ['x', 'y', 'z', 'w'].every((k) => Number.isFinite(body?.graspPose?.orientation?.[k]))
+                      ? body.graspPose
+                      : null
                 },
                 null,
                 2
@@ -243,6 +257,77 @@ export function mujocoBridgePlugin(): Plugin {
             return sendJson(res, 200, { ok: true, runId: id });
           } catch (err: any) {
             return sendJson(res, 500, { ok: false, message: err?.message || String(err) });
+          }
+        }
+
+        if (url.pathname === '/api/mujoco/auto/real' && req.method === 'POST') {
+          try {
+            if (!fs.existsSync(python)) return sendJson(res, 500, { ok: false, message: pythonMissing() });
+            const body = JSON.parse(await readBody(req));
+            const id = String(body?.runId ?? '');
+            const candidate = Number(body?.candidate ?? 0);
+            const ip = String(body?.robotIp ?? '').trim();
+            const src = String(body?.robotSrc ?? '').trim();
+            const speed = Number(body?.speed ?? 5);
+            const action = body?.action === 'home' ? 'home' : 'real'; // 'home' = Go Home only
+            const ipv4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+            if (!/^[\w-]+$/.test(id) || !Number.isInteger(candidate) || candidate < 0) {
+              return sendJson(res, 400, { ok: false, message: 'Bad run id or candidate.' });
+            }
+            if (ip !== 'fake' && !ipv4.test(ip)) {
+              return sendJson(res, 400, { ok: false, message: "Robot IP must look like 192.168.1.200 (or 'fake')." });
+            }
+            if (src && !ipv4.test(src)) return sendJson(res, 400, { ok: false, message: 'Bad source IP.' });
+            if (!Number.isFinite(speed) || speed < 1 || speed > 10) {
+              return sendJson(res, 400, { ok: false, message: 'Speed must be 1..10 %.' });
+            }
+            const runDir = path.join(runsDir, id);
+            const planPath = path.join(runDir, 'plan.json');
+            if (!fs.existsSync(planPath)) return sendJson(res, 404, { ok: false, message: `No plan for run ${id}` });
+            launch(id, runDir, autoScript, [
+              '--request', path.join(runDir, 'request.json'), '--plan', planPath,
+              '--mode', action, '--candidate', String(candidate),
+              '--robot-ip', ip, '--speed', String(speed), ...(src ? ['--robot-src', src] : []),
+              ...(body?.gripper === true && action === 'real' ? ['--real-gripper'] : [])
+            ]);
+            return sendJson(res, 200, { ok: true, runId: id });
+          } catch (err: any) {
+            return sendJson(res, 500, { ok: false, message: err?.message || String(err) });
+          }
+        }
+
+        // Stops the running simulator process. In real mode its SIGTERM handler sends `stop` to the robot.
+        if (url.pathname === '/api/mujoco/stop' && req.method === 'POST') {
+          if (child && child.exitCode === null) {
+            child.kill('SIGTERM');
+            return sendJson(res, 200, { ok: true, runId: childRunId });
+          }
+          return sendJson(res, 200, { ok: true, runId: null, message: 'Nothing running.' });
+        }
+
+        if (url.pathname === '/api/mujoco/fixture' && req.method === 'GET') {
+          // The pick fixture and the part made for it (sim_config.json pick_station), for the 3D view.
+          try {
+            const cfg = JSON.parse(fs.readFileSync(path.join(simDir, 'sim_config.json'), 'utf8'));
+            const ps = cfg?.pick_station ?? {};
+            const seatAll = !!ps.seat_all_parts;
+            if (!ps.enabled || !ps.file || (!ps.seated_part && !seatAll)) return sendJson(res, 200, { ok: true, fixture: null });
+            const repo = path.resolve(simDir, '..');
+            const abs = (p: string) => (path.isAbsolute(p) ? p : path.join(repo, p));
+            const fixture = fs.readFileSync(abs(ps.file));
+            const seated = ps.seated_part ? fs.readFileSync(abs(ps.seated_part)) : Buffer.alloc(0);
+            const { createHash } = await import('crypto');
+            return sendJson(res, 200, {
+              ok: true,
+              fixture: {
+                name: path.basename(ps.file),
+                base64: fixture.toString('base64'),
+                seatedSha256: createHash('sha256').update(seated).digest('hex'),
+                seatAll
+              }
+            });
+          } catch (err: any) {
+            return sendJson(res, 200, { ok: true, fixture: null, message: err?.message || String(err) });
           }
         }
 

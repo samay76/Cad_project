@@ -25,7 +25,8 @@ conda activate cadweb && cd ~/Cad_project && npm run dev     # http://localhost:
 
 In the **Auto Pick & Place** panel (left sidebar):
 
-1. **Load CAD**: choose a `.step` / `.stp` file.
+1. **Load CAD**: choose a `.step` / `.stp` file (or a `.stl` / `.obj` mesh in mm), or build the part from the depth
+   camera with **Scan from Camera** (see `CAMERA_SCAN.md`).
 2. Click the part where one finger should go, then where the other should go. Numbered markers show the points. A
    third click starts over; **Clear Points** removes them.
    When both are marked, a see-through shape appears between them, showing the direction the fingers move (arrows).
@@ -77,14 +78,25 @@ Best first, until three complete motions are found. This applies to grasps from 
 the straight approach, the fingers at the grip (only the pads may touch), the straight lift, the target
 (tried at several yaws), opening the fingers there, the retreat, and the free-space moves.
 
-Sequence: home → pre-grasp → grasp → close → lift → inspection → transfer → place → open → retreat → home. Free-space moves and the transfer use
+Sequence: home → turn the gripper → pre-grasp → grasp → close → lift → inspection → transfer → place → open → retreat → home.
+
+**Going to pick** (both the automatic and the taught-grasp flows, `pick_motion` in `sim_config.json`):
+home has the gripper pointing straight down, up over the middle of the table (`home_tcp_m`, default
+0.40, 0, 0.40 m). There, without moving the TCP, the gripper first turns to the orientation it will grip with.
+Then it travels in a straight line to the pre-grasp **without turning**, and approaches, closes and lifts
+slowly (`approach_speed_m_s` 0.03, `grip_seconds` 1.5, `lift_speed_m_s` 0.04). If turning at home or the
+straight travel is blocked, the old direct move from home is used (the gripper then turns on the way);
+`orient_first: false` always uses it.
+
+The return home, the transfer and blocked moves use
 RRT-Connect when a direct joint move would collide (`motion_planner.py`). Collisions are checked against
 the same shapes the physics uses, with the carried part attached to the gripper (`collision_check.py`).
 
 ### Limits
 
 - The whole STEP file is one rigid object: the click guides the grasp, but one solid of an assembly can't be picked alone.
-- The target is `place_xy` in `sim_config.json`. The part must fit the tray (inner 124 x 94 mm) and is placed in the orientation it was
+- The target is `place_xy` in `sim_config.json`. The tray is inner 124 x 94 mm; for a bigger part it grows to a
+  square that holds the part's footprint plus `tray_margin_m` (12 mm). The part is placed in the orientation it was
   grasped, turned about the vertical if needed.
 - The part is released onto the table and settles first. If that tips it, the plan uses the settled pose and the viewport says so.
 - Inspection views are set in `inspection` in `sim_config.json` (`"enabled": false` turns the stage off). A view the arm can't reach is
@@ -138,9 +150,30 @@ but new motions can no longer be recorded: use the automatic workflow instead.
 The part lies on the table in the **same orientation it has in the web viewer**, then settles under
 gravity; the grasp is applied relative to the part's settled pose.
 
+### Table
+
+The table is `../Table_base.step` (cabinet with an 800 x 800 mm perforated top). The arm stands on the
+table's 200 x 200 x 15 mm mounting plate, so the robot base is at z = 15 mm. The world frame is unchanged:
+the table top is at z = 0, the robot axis at x = y = 0, and the table spans x -0.175..0.625 m,
+y -0.425..0.375 m. `table_base.py` triangulates the STEP once into `assets/table_base/`
+(visual only), and redoes it when the file changes. Physics uses boxes: `table_top`, `table_mount_plate`
+and `table_pendant` (the teach pendant hanging off the +x edge). If the STEP cannot be converted, the
+table is drawn as plain boxes.
+
+### Pick station
+
+The part is picked from `../pickstation.step` (a base plate with 4 screw holes and a Ø30 mm column, 168 mm
+tall). `pick_station.py` reads its screw holes, column and top face from the STEP (cached in
+`assets/pick_station/`) and bolts it to the table: its holes go onto the table's 40 mm hole grid, at the
+grid position nearest `pick_station.near_xy` (currently holes at x 439.6/479.7, y -120.2/-80.0 mm, within
+0.25 mm). The part is set on the column top with its centre of mass over the column axis, which replaces
+`pick_xy`. Grasps keep the fingertips above the top face. A part that cannot balance on the Ø30 mm top
+falls off while settling and the plan stops with that message. `pick_station.enabled: false` puts the part
+back on the table at `pick_xy`. Run `python pick_station.py` to see where the station goes.
+
 ### Inspection camera
 
-A camera stands on a post at the table edge (`cam_inspection`). After lifting, the robot brings the part
+A camera stands on a post near the front edge of the table (`cam_inspection`). After lifting, the robot brings the part
 to the inspection point in front of it and turns it about its own centre of mass, like a turntable:
 front, turned 90/180/-90 deg, then tilted to show the bottom and the top. At each position a still image
 is saved. Then the part goes to the tray as before.
@@ -215,6 +248,8 @@ All transforms live in `frames.py`. Short version:
 | `hande.py` | Robotiq Hand-E MuJoCo model (meshes converted once into `assets/hande/`) |
 | `finger_collision.py` | Finger meshes split into convex pieces (CAD scene only), see below |
 | `cad_pick_place.py` | The simulator (preview, checks, execution, status reporting) |
+| `pick_station.py` | The pick station from `pickstation.step`, bolted to the table's hole grid; the part is picked from its top |
+| `table_base.py` | The table from `Table_base.step` (cached visual mesh, collision boxes, robot mounting height) |
 | `sim_config.json` | Pick/place positions, lift height, density, grip force, speeds |
 | `build_robot.py` | `build(obj='jenga' \| 'cad_part', ...)` – Jenga stays the default |
 | `../vite-plugins/mujocoBridge.ts` | Dev-server endpoints `/api/mujoco/simulate`, `/api/mujoco/auto/*` and `/api/mujoco/status` |
@@ -257,3 +292,39 @@ $PY auto_pick_place.py --step part.step --plan plan.json --mode execute     # ad
 # Acceptance test of the automatic workflow (a few minutes, no window)
 $PY test_auto_pick_place.py
 ```
+
+## Sim -> Real Sim (real Elite EC66)
+
+In the web app's AUTO PICK & PLACE panel, after planning:
+
+1. **Sim** runs the selected grasp in MuJoCo with physics (gripper included). When it has run to the end,
+   **Real Sim** is enabled for exactly that plan and grasp (choosing another grasp or replanning disables it again).
+2. **Real Sim** (`auto_pick_place.py --mode real`, `real_robot.py`) moves the real EC66 through the same joints:
+   first from wherever it is to the sim's home pose, then every phase, one `moveByJoint` per waypoint
+   (the dense plan reduced to waypoints within 3 mm of the planned TCP path), at 1-10 % joint speed (default 5).
+   The MuJoCo window follows the real joints live at 20 Hz; the gripper and part move in the sim only.
+   - Needs the pendant in REMOTE mode and the robot stopped. Refused if a joint would turn > 120 deg in one move
+     (jog the robot near the home pose first), or the wrist / TCP comes near the table top or the pendant holder.
+   - **Go Home (real robot)** brings the robot from anywhere to the plan's home pose first: arm straight up in
+     place (J2 -90, J3 0, J4 -90), turn J1 and the wrist while upright, then lower. No move turns a joint more than
+     100 deg. Needs a plan for the EC66, not a Sim check. Joints a whole turn away (e.g. J5 -270 = 90) are kept on
+     the robot's current turn, in Go Home and Real Sim alike.
+   - **Real gripper (Robotiq 2F-85 on USB)** box: `real_gripper.py` drives it (`sim_config.json` `real_gripper`:
+     port, slave, speed 64, force 50). It is activated if needed and opened before the arm moves; at the grasp it
+     squeezes (outside grip: closes until it stops on the part; inside: opens until it does), at the drop it opens,
+     and before going home it opens fully. The arm holds still while it moves; the sim fingers follow the real ones.
+     Port permission: `sudo chmod a+rw /dev/ttyUSB0` (or the `dialout` group).
+   - `gripper_coupling_mm` (EC66 + 2F-85: 22 mm, measured): the real gripper sits on a coupling plate, so the sim
+     mounts it (and draws the plate) 22 mm further out: sim TCP 177.8 mm from the flange.
+   - `robot_base_offset_mm` (EC66: [0, 0, 20], x/y/z mm): calibration of where the real robot base is relative to the
+     table vs the table CAD. Measure it with `calibrate_robot.py`: close the gripper, jog the closed fingertips onto
+     the centre of a big table hole (default (15, 0)), run `python calibrate_robot.py --write`, re-plan. Check at a
+     second hole. Real Sim follows the plan within 0.5 mm near the part (approach, lift, place, retreat).
+   - `place_release_height_m` (0.05): at the drop location the part is let go 50 mm above the tray floor, so the
+     gripper never goes down near the table there.
+   - **Stop** in the web app, or closing the MuJoCo window, sends `stop` to the robot. Keep a hand on the E-stop.
+   - Robot IP / source IP / speed are set in the panel (saved in the browser). IP `fake` = simulated robot, for
+     testing the whole flow without hardware.
+
+The robot client and the wait-for-arrival logic come from `ec66_sim_standalone/ec66_sim.py` (left unchanged). The web
+sim's EC66 model has the same joint zeros as the real controller, so the planned joints are sent as they are (degrees).

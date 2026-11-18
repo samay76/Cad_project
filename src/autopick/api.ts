@@ -28,10 +28,11 @@ export interface GraspPlan {
 }
 
 export interface PlanDocument {
+  robot?: string; // robot id the plan was made for ('ec66', 'cs66')
   robotLabel: string;
   gripperLabel: string;
   awayFromClick: boolean;
-  part: { tippedDeg: number; driftMm: number; massKg: number; sizeMm: number[] };
+  part: { T_world_part: number[][]; tippedDeg: number; driftMm: number; massKg: number; sizeMm: number[] };
   scene: { boxes: { name: string; pos: number[]; halfSize: number[] }[]; placeXY: number[] };
   world_in_part: Pose;
   plans: GraspPlan[];
@@ -61,6 +62,8 @@ export interface PlanRequest {
   tcpOffset: number;
   preGraspDistance: number;
   points: MarkedPoint[];
+  pickOffsetMm: { x: number; y: number; z: number }; // added to the grasp position, robot base frame
+  graspPose: Pose | null; // gripper pose set in the view (part frame, mm): planned exactly when given
 }
 
 export const arrayBufferToBase64 = (buf: ArrayBuffer): string => {
@@ -97,4 +100,28 @@ export const fetchPlan = async (runId: string): Promise<PlanDocument> => {
 export const fetchStatus = async (runId: string): Promise<SimStatus> => {
   const resp = await fetch(`/api/mujoco/status?id=${encodeURIComponent(runId)}`);
   return resp.json();
+};
+
+/** Real robot connection for "Real Sim" (jenga_mujoco/real_robot.py). ip 'fake' = simulated robot. */
+export interface RealRobotSettings {
+  ip: string;
+  src: string; // local IP to connect from, optional
+  speed: number; // joint speed %, 1..10
+  gripper: boolean; // drive the real Robotiq 2F-85 on USB during Real Sim
+}
+
+export const startRealRun = (runId: string, candidate: number, robot: RealRobotSettings, action: 'real' | 'home' = 'real') =>
+  post('/api/mujoco/auto/real', {
+    runId,
+    candidate,
+    robotIp: robot.ip,
+    robotSrc: robot.src,
+    speed: robot.speed,
+    gripper: robot.gripper,
+    action
+  });
+
+/** Stops the running simulator process; during Real Sim this also sends `stop` to the robot. */
+export const stopRun = async () => {
+  await fetch('/api/mujoco/stop', { method: 'POST' });
 };

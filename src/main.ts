@@ -7,11 +7,13 @@ import { GripperPanel } from './ui/GripperPanel';
 import { PartPanel } from './ui/PartPanel';
 import { GraspListView } from './ui/GraspList';
 import { CameraFeedPanel } from './ui/CameraFeedPanel';
+import { CameraScanPanel } from './ui/CameraScanPanel';
 import { AutoPickPanel } from './ui/AutoPickPanel';
 import { GripperLoader } from './gripper/GripperLoader';
 import { GraspController } from './gripper/GraspController';
 import { PartController } from './part/PartController';
-import { AutoPickController } from './autopick/AutoPickController';
+import { AutoPickController, SIM_PART_FILE } from './autopick/AutoPickController';
+import { FixtureView } from './autopick/FixtureView';
 import { arrayBufferToBase64 } from './autopick/api';
 import type { SavedGrasp, ClickedPointInfo, GripperState } from './types';
 import {
@@ -40,7 +42,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   let graspController: GraspController | null = null;
   let partController: PartController | null = null;
   let cameraPanel: CameraFeedPanel | null = null;
+  let scanPanel: CameraScanPanel | null = null;
   let autoPick: AutoPickController | null = null;
+  let fixtureView: FixtureView | null = null;
 
   // State
   let lastClickedPoint: ClickedPointInfo | null = null;
@@ -86,6 +90,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     await viewer.loadFile(buffer, fileName);
     currentModelBuffer = buffer.slice(0);
     autoPick?.clearPoints();
+    // The part made for the pick fixture is shown sitting on it (as in the simulator), to teach on it there.
+    fixtureView ??= new FixtureView(viewer);
+    fixtureView
+      .update(currentModelBuffer)
+      .then((shown) => shown && layout?.showInfo('Pick fixture', `${fileName} is shown on the pick fixture, as it sits in the simulator. Mark the pick points on it there.`))
+      .catch((err) => console.warn('Fixture view:', err));
 
     const modelRoot = viewer.getModelRoot();
     if (partController) {
@@ -256,11 +266,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const simulateGraspInMujoco = async (grasp: SavedGrasp) => {
     if (!currentModelBuffer || !viewer?.getModelRoot()) {
-      layout?.showError('Load the CAD part (STEP file) first.', 'MuJoCo simulation');
+      layout?.showError('Load the CAD part (or scan it from the camera) first.', 'MuJoCo simulation');
       return;
     }
-    if (!/\.(stp|step)$/i.test(currentModelName)) {
-      layout?.showError('MuJoCo simulation currently supports STEP parts only.', 'MuJoCo simulation');
+    if (!SIM_PART_FILE.test(currentModelName)) {
+      layout?.showError('MuJoCo simulation supports STEP (.step/.stp) and mesh (.stl/.obj, mm) parts.', 'MuJoCo simulation');
       return;
     }
     if (grasp.partName && grasp.partName !== currentModelName) {
@@ -280,7 +290,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     layout?.showInfo(
       'MuJoCo simulation',
-      `Starting simulator: ${ROBOTS[activeRobotId].label} + ${GRIPPERS[grasp.gripperId ?? '2f85'].label} (first run converts the STEP mesh, ~30 s)...`
+      `Starting simulator: ${ROBOTS[activeRobotId].label} + ${GRIPPERS[grasp.gripperId ?? '2f85'].label} (first run converts the part's mesh, ~30 s)...`
     );
     try {
       const resp = await fetch('/api/mujoco/simulate', {
@@ -353,6 +363,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         layout.showError(err?.message || `Failed to read file ${file.name}`);
       }
     },
+    onScanCameraClick: () => {
+      scanPanel?.toggle();
+    },
     onLoadGripperClick: async () => {
       await loadGripperModel();
     },
@@ -388,6 +401,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 2. Initialize 3D Viewer into viewport container
   viewer = new Viewer(layout.viewportContainer);
   cameraPanel = new CameraFeedPanel(layout.viewportContainer);
+  // Part from the depth camera: live depth feed + the CAD model built from it (STL, mm) -> loaded as the part.
+  scanPanel = new CameraScanPanel(layout.viewportContainer, {
+    onLoadModel: async (buffer, fileName) => {
+      await loadCADBuffer(buffer, fileName);
+      layout?.showInfo('Scanned part loaded', 'Click the model where finger 1 should grip, then where finger 2 should grip.', 6000);
+    }
+  });
 
   // 3. Initialize Part Controller
   partController = new PartController();
@@ -469,9 +489,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     },
     onStepTranslate: (axis, delta) => {
       graspController?.stepTranslate(axis, delta);
+      autoPick?.gripperMoved();
     },
     onStepRotate: (axis, delta) => {
       graspController?.stepRotate(axis, delta);
+      autoPick?.gripperMoved();
     },
     onOpeningChange: (width) => {
       graspController?.setOpeningWidth(width);

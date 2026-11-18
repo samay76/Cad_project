@@ -16,6 +16,9 @@ Modes:
   plan     settle the part, find grasps, plan the motions, write plan.json. No window.
   preview  open MuJoCo and play the planned motion kinematically (arm, gripper, part; no physics).
   execute  run the planned motion with full physics and report what actually happened.
+  real     move the real Elite EC66 through the planned joints (slow, REMOTE mode), the MuJoCo scene following
+           it live (real_robot.py). --robot-ip <ip> (or 'fake' to test without hardware), --robot-src, --speed.
+  home     move the real EC66 from wherever it is to the plan's home pose (arm up, turn, lower), same options.
 
 Each module is responsible for one thing:
   grasp_planner.py     candidate grasps from the part geometry
@@ -25,8 +28,9 @@ Each module is responsible for one thing:
   ik.py                inverse kinematics
   cad_pick_place.py    the MuJoCo scene, stepping, viewer and ghost gripper (CadPickPlace, reused here)
 
-Sequence: home -> pre-grasp -> grasp -> close -> lift -> inspection (camera on the table, set up in
-sim_config.json) -> transfer -> place -> open -> retreat -> home.
+Sequence: home -> turn the gripper to the grasp orientation (in place) -> straight to the pre-grasp ->
+grasp -> close -> lift -> inspection (camera on the table, set up in sim_config.json) -> transfer ->
+place -> open -> retreat -> home.
 """
 import argparse
 import dataclasses
@@ -41,10 +45,13 @@ import numpy as np
 import mujoco
 
 from cad_part import PART_JOINT
+from pick_station import release_weld, drop_payload, STATION_BODY
 from cad_pick_place import CadPickPlace, PlanError, Status, GRIP_CLOSED, GRIP_OPEN, GRIPPER_NAMES, TCP_SITE
 from collision_check import SceneCollision
+from ik import solve as ik_solve
 from frames import T_to_pos_quat, inv, make_T, pose_error, quat_xyzw_to_wxyz, site_T
-from grasp_planner import GraspParams, PointsError, gap_at_click, generate_candidates, grasps_from_points
+from grasp_planner import (Candidate, GraspParams, PointsError, RayMesh, _in_cavity, classify_points, gap_at_click,
+                           generate_candidates, grasps_from_points)
 from gripper_geometry import GripperGeometry
 from ik import N_ARM
 from motion_planner import MotionError, MotionPlanner, joint_path_length, resample
@@ -64,9 +71,12 @@ DURATION_PENALTY = 0.05          # grasp score points per second of motion
 PLACE_YAWS_DEG = (0, 90, -90, 180, 45, -45, 135, -135)
 
 PHASE_LABELS = {
+    'orient': 'Turning the gripper to the grasp orientation at home',
     'pre-grasp': 'Moving to the pre-grasp position',
     'approach': 'Approaching the grasp',
+    'wait': 'Waiting at the pick point',
     'grip': 'Closing the gripper',
+    'hold': 'Holding the part',
     'lift': 'Lifting the part',
     'inspect': 'Showing the part to the camera',
     'transfer': 'Carrying the part to the target',
@@ -120,12 +130,10 @@ class AutoPickPlace(CadPickPlace):
                  **grasp}
         super().__init__(step_path, grasp, q_part, cfg, status, headless=headless, snapshots=snapshots,
                          feed_dir=feed_dir, robot=req.get('robotId'))
-        # MuJoCo's soft contacts let a firmly held part creep along the fingers (~0.1 mm/s): over a long camera
-        # sequence it walks off the pad and falls. This removes that drift only; a weak grip still slips.
-        self.model.opt.noslip_iterations = NOSLIP_ITERATIONS
         self.part_quat = np.asarray(q_part, dtype=float)
         self.free_joint_dof = int(self.model.jnt_dofadr[self.model.joint(PART_JOINT).id])
         self.free_joint_adr = int(self.model.jnt_qposadr[self.model.joint(PART_JOINT).id])
+        self.grasp_test = dict(cfg.get('grasp_test') or {})
 
     # ---------------- settling ----------------
     def settle(self):
@@ -139,14 +147,16 @@ class AutoPickPlace(CadPickPlace):
             self.step(0.25)
             waited += 0.25
         T = self.part_T()
-        if T[2, 3] < -0.05:
-            raise PlanError('The part rolled off the table while settling. Rotate it in the Part Pose tab '
-                            'so it lies stably, then try again.')
+        self.check_on_support(T)
         return T
 
     # ---------------- planning ----------------
-    def compute_plan(self, click_point, click_normal, n_plans=3, points=None):
+    def compute_plan(self, click_point, click_normal, n_plans=3, points=None, pick_offset_mm=(0.0, 0.0, 0.0),
+                     grasp_pose=None):
+        """pick_offset_mm: moves every grasp by this much (robot base frame, mm), set from the web's Pick Offset
+        fields. It is part of the plan, so the Sim and the real robot both use it."""
         started = time.time()
+        self.pick_offset = np.asarray(pick_offset_mm, dtype=float) / 1000.0
         st = self.status
         st.update('settling', 'Letting the part settle on the table...')
         T_start = self.part_T()
@@ -161,16 +171,35 @@ class AutoPickPlace(CadPickPlace):
         self.collision = SceneCollision(self.model, self.fingers, self.robot, 'cad_part', PART_JOINT)
         self.planner = MotionPlanner(self.model, self.scratch, TCP_SITE)
         params = self.params = GraspParams(**(self.cfg.get('auto_grasp') or {}))
-        if points is not None:
-            # The user chose where the fingers go: plan for exactly that, or say why not.
+        self.marked_points = points
+        if grasp_pose is not None and points is not None:
+            # The user set the gripper pose in the web view (Step Jogging, position and orientation): plan exactly
+            # that grasp, or say why not. No other grasp is tried in its place.
+            plans, rejected, candidates, rejects = self._plan_taught_pose(grasp_pose, points, T_wp, mesh)
+            note = self._points_on_pads_note(grasp_pose, points)
+            if not plans:
+                why = '; '.join(f'{k}' for k, _ in rejected.most_common(2))
+                raise PlanError(f'The gripper pose you set cannot be used: {why}. Move or turn the gripper '
+                                '(Step Jogging) and press Plan to Points again, or Clear Points to let the planner '
+                                'choose.')
+        elif points is not None:
+            # The user chose where the fingers go: plan for exactly that, or say why not. Points on the top and
+            # bottom of a ledge need a level gripper coming from the side, so here the approach may tilt up to
+            # points_max_tilt_deg (sim_config, default 90). Straight down is still tried first.
+            params = dataclasses.replace(params, max_tilt_deg=float(self.cfg.get('points_max_tilt_deg', 90.0)))
             try:
-                candidates, rejects, note = grasps_from_points(mesh.vertices, mesh.faces, points, T_wp, self.geo, params)
+                candidates, rejects, note = grasps_from_points(mesh.vertices, mesh.faces, points, T_wp, self.geo, params,
+                                                               table_z=self.support_z)
             except PointsError as e:
                 raise PlanError(str(e)) from None
+            # One finger goes into a cavity (e.g. pinching a tube wall): see plan_candidate's approach openings.
+            self.finger_in_cavity = bool(note)
             st.update('grasp', f'{len(candidates)} ways to reach both points; checking them on the robot...')
             plans, rejected = self._plans_from(candidates, T_wp, n_plans)
             if not plans:
                 why = '; '.join(f'{k} ({v}x)' for k, v in (rejected or rejects).most_common(3))
+                if np.any(self.pick_offset):
+                    raise PlanError(self._offset_failure(candidates, T_wp, why))
                 raise PlanError(f'The gripper cannot reach both marked points with the {GRIPPER_NAMES[self.gripper]}. '
                                 f'Main reasons: {why}. Try other points or the other gripper.')
         else:
@@ -178,7 +207,8 @@ class AutoPickPlace(CadPickPlace):
             wants_inside = 'inside' in params.modes and gap_at_click(mesh.vertices, mesh.faces, click_point, click_normal, params)
             first = dataclasses.replace(params, modes=('inside',)) if wants_inside else params
             candidates, rejects = generate_candidates(
-                mesh.vertices, mesh.faces, click_point, click_normal, T_wp, self.meta['com_m'], self.geo, first)
+                mesh.vertices, mesh.faces, click_point, click_normal, T_wp, self.meta['com_m'], self.geo, first,
+                table_z=self.support_z)
             st.update('grasp', f"{len(candidates)} {'inside-grip ' if wants_inside else ''}grasp candidates from the "
                                'geometry; checking them on the robot...')
             plans, rejected = self._plans_from(candidates, T_wp, n_plans)
@@ -191,7 +221,7 @@ class AutoPickPlace(CadPickPlace):
                         else f'No grasp works at the selected point{reason}, so this one is elsewhere on the part. ')
                 st.update('grasp', 'Nothing works at the selected point; searching the whole part...')
                 candidates, more = generate_candidates(mesh.vertices, mesh.faces, None, None, T_wp, self.meta['com_m'],
-                                                       self.geo, params)
+                                                       self.geo, params, table_z=self.support_z)
                 rejects.update(more)
                 plans, more_rejected = self._plans_from(candidates, T_wp, n_plans)
                 rejected.update(more_rejected)
@@ -208,6 +238,7 @@ class AutoPickPlace(CadPickPlace):
             'tcpOffset': self.tcp_offset_mm,
             'click': None if click_point is None else (np.asarray(click_point) * 1000).tolist(),
             'points': None if points is None else [(p * 1000).tolist() for p, _ in points],
+            'pickOffsetMm': (self.pick_offset * 1000).tolist(),
             'awayFromClick': bool(note),
             'note': note,
             'part': {'T_world_part': T_wp.tolist(), 'tippedDeg': round(tipped, 1), 'driftMm': round(float(drift), 1),
@@ -219,12 +250,74 @@ class AutoPickPlace(CadPickPlace):
             'seconds': round(time.time() - started, 1),
         }
 
+    def _points_on_pads_note(self, T_part_tcp, points):
+        """'' if both marked points are under the finger pads at this gripper pose, else a warning for the user."""
+        pad = self.geo.at(0.0)
+        T_tcp_part = inv(np.asarray(T_part_tcp, dtype=float))
+        off = []
+        for p, _ in points:
+            q = (T_tcp_part @ np.r_[p, 1.0])[:3]
+            dy = max(0.0, abs(q[1]) - pad.half_y)
+            dz = max(0.0, abs(q[2] - pad.center_z) - pad.half_z)
+            off.append(np.hypot(dy, dz) * 1000)
+        if max(off) < 1.0:
+            return ''
+        return (f'Note: at the gripper pose you set, the marked points are {off[0]:.0f} mm and {off[1]:.0f} mm off '
+                'the finger pads, so the fingers grip elsewhere. ')
+
+    def _plan_taught_pose(self, T_part_tcp, points, T_wp, mesh):
+        """One candidate at the gripper pose from the web (part frame), gripping the marked points."""
+        (p1, n1), (p2, n2) = points
+        try:
+            mode, width, _, _ = classify_points(p1, n1, p2, n2, self.params.friction)
+        except PointsError as e:
+            raise PlanError(str(e)) from None
+        self.finger_in_cavity = mode == 'outside' and (
+            _in_cavity(RayMesh(mesh.vertices, mesh.faces), p1, n1) != _in_cavity(RayMesh(mesh.vertices, mesh.faces), p2, n2))
+        T = np.asarray(T_part_tcp, dtype=float)
+        cand = Candidate(T, width * 1000.0, mode, (p1, p2), 1.0, dict(taught=1.0))
+        self.status.update('motion', 'Planning the arm path to the gripper pose you set...')
+        self.pick_offset = np.zeros(3)   # the pose is exact: no offset on top
+        try:
+            return [self.plan_candidate(cand, T_wp)], Counter(), [cand], Counter()
+        except CandidateRejected as e:
+            return [], Counter({str(e): 1}), [cand], Counter()
+
+    def _offset_failure(self, candidates, T_wp, why):
+        """The pick offset makes every grasp collide or unreachable: say so, and find how far it can go (same
+        direction) before it does. Nothing is planned with the smaller offset: the user decides."""
+        full = self.pick_offset.copy()
+        fmt = lambda v: '(' + ', '.join(f'{c * 1000:.1f}' for c in v) + ') mm'  # noqa: E731
+        msg = (f'With the pick offset X/Y/Z {fmt(full)} the gripper would collide or cannot get there. '
+               f'Main reasons: {why}.')
+        self.status.update('grasp', 'The pick offset does not work; looking for how far it can go...')
+        try:
+            ok = None
+            for f in (0.75, 0.5, 0.25, 0.0):
+                self.pick_offset = full * f
+                if self._plans_from(candidates, T_wp, 1)[0]:
+                    ok = self.pick_offset.copy()
+                    break
+        finally:
+            self.pick_offset = full
+        if ok is None:
+            return msg + ' The marked points do not work even without an offset: mark other points.'
+        if not np.any(ok):
+            return msg + ' Any offset in this direction collides: set it back to 0, or try another direction.'
+        return msg + f' An offset of {fmt(ok)} works: enter that (or less) and press Plan to Points again.'
+
     def _plans_from(self, candidates, T_wp, n_plans):
         """Complete motions for the best candidates that work, and a tally of why the others did not."""
         plans, rejected = [], Counter()
+        offset = getattr(self, 'pick_offset', np.zeros(3))
+        slid = set()
         for i, cand in enumerate(candidates):
+            if np.any(offset):  # the user's pick offset: the TCP moves by it in the world (robot base) frame
+                shift = np.eye(4)
+                shift[:3, 3] = offset
+                cand = dataclasses.replace(cand, T_part_tcp=inv(T_wp) @ shift @ T_wp @ cand.T_part_tcp)
             try:
-                plans.append(self.plan_candidate(cand, T_wp))
+                plans.append(self._plan_or_slide(cand, T_wp, slid))
                 self.status.update('motion', f'Found {len(plans)}/{n_plans} complete motions '
                                              f'(checked {i + 1}/{len(candidates)} grasps)...')
             except CandidateRejected as e:
@@ -232,6 +325,32 @@ class AutoPickPlace(CadPickPlace):
             if len(plans) == n_plans:
                 break
         return plans, rejected
+
+    def _plan_or_slide(self, cand, T_wp, slid):
+        """plan_candidate; for marked points, if the pad centred on them collides, the gripper slides sideways
+        along the pads (across the closing plane) while both points stay on them, e.g. away from a wall next to
+        the points. Each approach direction is slid once (slid: those already tried), to bound the time."""
+        try:
+            return self.plan_candidate(cand, T_wp)
+        except CandidateRejected as first:
+            points = getattr(self, 'marked_points', None)
+            if not points or ('blocked' not in str(first) and 'hit' not in str(first)):
+                raise
+            key = tuple(np.round((T_wp @ cand.T_part_tcp)[:3, 2], 1)) + (round(cand.width_mm),)
+            if key in slid:
+                raise
+            slid.add(key)
+            half = self.geo.at(cand.width_mm).half_y - 0.002          # keep the points 2 mm inside the pad edge
+            y = [float((inv(cand.T_part_tcp) @ np.r_[p, 1.0])[1]) for p, _ in points]
+            for d in (0.003, -0.003, 0.006, -0.006, 0.009, -0.009):
+                if max(abs(v - d) for v in y) > half:
+                    continue
+                moved = dataclasses.replace(cand, T_part_tcp=cand.T_part_tcp @ make_T([0.0, d, 0.0], [1, 0, 0, 0]))
+                try:
+                    return self.plan_candidate(moved, T_wp)
+                except CandidateRejected:
+                    continue
+            raise first
 
     def _failure_message(self, on_robot, geometric, candidates):
         """Grasps that failed on the robot explain more than samples that failed on geometry."""
@@ -249,12 +368,17 @@ class AutoPickPlace(CadPickPlace):
         """Static boxes of the scene (world frame, mm) so the web preview can draw the workspace."""
         m = self.model
         boxes = []
+        static = {0, mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, STATION_BODY)}  # fixture geoms: own static body
         for g in range(m.ngeom):
             name = m.geom(g).name
-            if m.geom_bodyid[g] == 0 and m.geom_type[g] == mujoco.mjtGeom.mjGEOM_BOX and \
-                    (name == 'table_top' or name.startswith('box_')):
+            if m.geom_bodyid[g] in static and m.geom_type[g] == mujoco.mjtGeom.mjGEOM_BOX and \
+                    (name == 'table_top' or name.startswith(('box_', 'pickstation_'))):
                 boxes.append({'name': name, 'pos': (m.geom_pos[g] * 1000).tolist(),
                               'halfSize': (m.geom_size[g] * 1000).tolist()})
+            elif name in ('pickstation_column', 'pickstation_top'):  # drawn as its bounding box
+                r, h = m.geom_size[g][:2]
+                boxes.append({'name': name, 'pos': (m.geom_pos[g] * 1000).tolist(),
+                              'halfSize': [r * 1000, r * 1000, h * 1000]})
         return {'boxes': boxes, 'placeXY': [float(v) * 1000 for v in self.cfg['place_xy']]}
 
     def plan_candidate(self, cand, T_wp):
@@ -267,6 +391,14 @@ class AutoPickPlace(CadPickPlace):
         pre_mm = float(self.pre_mm)
         T_pre = T_grasp @ make_T([0, 0, -pre_mm / 1000.0], [1, 0, 0, 0])
         q_grasp_seed = planner.ik(T_pre, [self.home])
+        side = T_grasp[2, 2] > -np.cos(np.radians(30.0))   # approach tilted more than 30 deg from straight down
+        if side and (q_grasp_seed is None or
+                     col.check(q_grasp_seed, self.geo.max_opening_mm, part_tol=0.001) is not None):
+            # A gripper held level (side grip) low on the table: the arm posture nearest home often puts the
+            # elbow into the table, while another posture (other elbow / wrist) is clear. Look for that one.
+            clear = self._clear_posture(T_pre, T_grasp, min(self.geo.max_opening_mm, cand.width_mm + 8.0))
+            if clear is not None:
+                q_grasp_seed = clear
         if q_grasp_seed is None:
             raise CandidateRejected('pre-grasp position out of reach')
 
@@ -276,6 +408,11 @@ class AutoPickPlace(CadPickPlace):
         else:
             opening_max = self.geo.max_opening_mm
             openings = [opening_max] + [w for w in (cand.width_mm + 20.0, cand.width_mm + 8.0) if w < opening_max]
+            if getattr(self, 'finger_in_cavity', False):
+                # One finger must go DOWN INTO the cavity. Wide open, that finger lands outside the far wall
+                # and the fingers close on the whole part from outside instead of pinching the marked wall.
+                # So open as wide as the cavity allows, minus a margin for the real part's placement.
+                openings = self._cavity_openings(cand, T_grasp, q_grasp_seed, opening_max)
 
         # First look for an opening that clears the part, so the fingers don't nudge it on the way down.
         # Only if none does, accept one that brushes it within the collision tolerance.
@@ -284,6 +421,10 @@ class AutoPickPlace(CadPickPlace):
             for width in openings:
                 free = lambda q, w=width, tol=part_tol: col.check(q, w, part_tol=tol) is None  # noqa: E731
                 hit = col.check(q_grasp_seed, width, part_tol=min(part_tol, 0.0))
+                if hit is None and side:
+                    # Level gripper low over the table: the wide-open finger links hang down; the arm only gets to
+                    # the pre-grasp (free move, ARM_CLEARANCE) with an opening that keeps them clear.
+                    hit = col.check(q_grasp_seed, width, env_clearance=ARM_CLEARANCE, part_tol=min(part_tol, 0.0))
                 if hit is not None:
                     last = part_reason(hit)
                     continue
@@ -310,6 +451,8 @@ class AutoPickPlace(CadPickPlace):
 
         T_tcp_part = inv(T_part_tcp)
         hold = self._inside_hold_width(q_grasp) if inside else cand.width_mm
+        if self.grasp_test.get('enabled'):
+            return self._plan_grasp_test(cand, T_wp, T_pre, T_grasp, T_part_tcp, q_pre, approach, width_in, hold)
         def free_carry(clearance):
             return lambda q: col.check(q, hold, carried_T_tcp_part=T_tcp_part, carried_clearance=clearance) is None
 
@@ -326,13 +469,7 @@ class AutoPickPlace(CadPickPlace):
         placed = self._plan_place(T_wp, T_part_tcp, lift[-1], free_carry, hold, width_in, inside)
         col.set_part(T_wp)
 
-        # Free-space move to the pre-grasp, with the part still on the table.
-        def free_arm(q):
-            return col.check(q, width_in, env_clearance=ARM_CLEARANCE) is None
-        try:
-            pre_path = planner.connect('pre-grasp', self.home, q_pre, free_arm)
-        except MotionError:
-            raise CandidateRejected('no collision-free path to the pre-grasp') from None
+        orient, pre_path = self._path_to_pre(q_pre, T_pre, width_in)
 
         # Last, so this time is only spent on grasps that otherwise work. It never rules a grasp out.
         self.T_part_tcp = T_part_tcp
@@ -348,11 +485,14 @@ class AutoPickPlace(CadPickPlace):
                                               label=f'Showing the part to the camera: {label}', view=label))
             q_prev = path[-1]
 
+        pk = self.pick
         phases = [
-            self._phase('pre-grasp', pre_path, width_in, False, FREE_SPEED),
-            self._phase('approach', approach, width_in, False, CARRY_SPEED, minimum=1.5),
-            self._phase('grip', [q_grasp], width_in, False, seconds=1.0),
-            self._phase('lift', lift, hold, True, CARRY_SPEED, minimum=1.5),
+            *self._pick_phases(orient, pre_path, width_in, T_pre),
+            self._phase('approach', approach, width_in, False, CARRY_SPEED,
+                        minimum=self.pick_seconds(pre_mm / 1000.0, 'approach_speed_m_s', 1.5)),
+            self._phase('grip', [q_grasp], width_in, False, seconds=float(pk['grip_seconds'])),
+            self._phase('lift', lift, hold, True, CARRY_SPEED,
+                        minimum=self.pick_seconds(self.cfg['lift_height_m'], 'lift_speed_m_s', 1.5)),
             *inspect_phases,
             self._phase('transfer', transfer, hold, True, CARRY_SPEED, minimum=2.5),
             self._phase('place', placed['down'], hold, True, CARRY_SPEED, minimum=1.5),
@@ -370,7 +510,7 @@ class AutoPickPlace(CadPickPlace):
             'grasp': {
                 'id': f'auto_{int(time.time() * 1000)}_{len(phases)}', 'name': 'Auto Grasp',
                 'tcpPose': tcp, 'rpy': rpy_json(T_part_tcp), 'openingWidth': width_in,
-                'measuredGraspWidth': cand.width_mm if not inside else width_in,
+                'measuredGraspWidth': cand.width_mm if not inside else hold,   # fingers at contact
                 'contactPoints': {'left': self._mm_vec(cand.contacts[0]), 'right': self._mm_vec(cand.contacts[1])},
                 'preGraspDistance': pre_mm, 'tcpOffset': self.tcp_offset_mm, 'gripMode': cand.mode,
                 'approachAxis': {'x': 0, 'y': 0, 'z': 1}, 'closingAxis': {'x': 1, 'y': 0, 'z': 0},
@@ -382,6 +522,136 @@ class AutoPickPlace(CadPickPlace):
             'durationS': round(duration, 1), 'phases': phases, 'inspectionViews': len(inspect),
             'inspectionSkipped': skipped,
         }
+
+
+    def _path_to_pre(self, q_pre, T_pre, width_in):
+        """Free-space move home -> pre-grasp, with the part still in place: first turn the gripper at home to the
+        grasp orientation, then travel in a straight line without turning. If that is blocked, fall back to a
+        free joint-space path (the gripper then turns on the way). Returns (orient or None, pre_path)."""
+        col, planner = self.collision, self.planner
+
+        def free_arm(q):
+            return col.check(q, width_in, env_clearance=ARM_CLEARANCE) is None
+        if self.pick['orient_first']:
+            try:
+                return planner.orient_then_travel(self.home, self.T_home, q_pre, T_pre, free_arm)
+            except MotionError:
+                pass
+        try:
+            return None, planner.connect('pre-grasp', self.home, q_pre, free_arm)
+        except MotionError:
+            raise CandidateRejected('no collision-free path to the pre-grasp') from None
+
+    def _pick_phases(self, orient, pre_path, width_in, T_pre):
+        if orient is None:
+            return [self._phase('pre-grasp', pre_path, width_in, False, FREE_SPEED)]
+        travel_m = float(np.linalg.norm(T_pre[:3, 3] - self.T_home[:3, 3]))
+        return [
+            *([self._phase('orient', orient, width_in, False, self.pick['orient_speed_rad_s'], minimum=1.5)]
+              if joint_path_length([self.home, *orient]) > 0.02 else []),   # no turn needed: no pause
+            self._phase('pre-grasp', pre_path, width_in, False, FREE_SPEED,
+                        minimum=self.pick_seconds(travel_m, 'travel_speed_m_s', 1.5),
+                        label='Moving to the pre-grasp position (gripper already turned)'),
+        ]
+
+    def _plan_grasp_test(self, cand, T_wp, T_pre, T_grasp, T_part_tcp, q_pre, approach, width_in, hold):
+        """sim_config.json grasp_test (sim-to-real grasp check): go to the pick point, wait, close the gripper on
+        the part in the fixture, hold, open, back out along the approach line and return home the way it came.
+        No lift, no camera, no place: the part stays in the fixture."""
+        gt = self.grasp_test
+        wait_s, hold_s = float(gt.get('wait_before_close_s', 5.0)), float(gt.get('hold_closed_s', 10.0))
+        orient, pre_path = self._path_to_pre(q_pre, T_pre, width_in)
+        q_grasp = approach[-1]
+        approach_s = self.pick_seconds(float(self.pre_mm) / 1000.0, 'approach_speed_m_s', 1.5)
+        back = []
+        for q in [*reversed(pre_path), *(reversed(orient) if orient is not None else []), self.home]:
+            q = np.asarray(q, dtype=float)
+            if not back or np.max(np.abs(q - back[-1])) > 1e-6:
+                back.append(q)
+        to_pre = self._pick_phases(orient, pre_path, width_in, T_pre)
+        phases = [
+            *to_pre,
+            self._phase('approach', approach, width_in, False, CARRY_SPEED, minimum=approach_s),
+            self._phase('wait', [q_grasp], width_in, False, seconds=wait_s,
+                        label=f'Waiting {wait_s:.0f} s at the pick point (gripper open)'),
+            self._phase('grip', [q_grasp], width_in, False, seconds=float(self.pick['grip_seconds'])),
+            self._phase('hold', [q_grasp], hold, False, seconds=hold_s,
+                        label=f'Holding the part {hold_s:.0f} s (gripper closed)'),
+            self._phase('release', [q_grasp], width_in, False, seconds=1.0),
+            self._phase('retreat', approach[::-1], width_in, False, CARRY_SPEED, minimum=approach_s,
+                        label='Backing out along the approach line'),
+            self._phase('home', back, width_in, False, FREE_SPEED,   # as fast as the way in, no faster
+                        minimum=max(1.5, sum(p['seconds'] for p in to_pre))),
+        ]
+        for p in phases:
+            self._add_tcp_samples(p, T_wp)
+        tilt = float(np.degrees(np.arccos(np.clip(-T_grasp[2, 2], -1, 1))))
+        inside = cand.mode == 'inside'
+        return {
+            'grasp': {
+                'id': f'auto_{int(time.time() * 1000)}_{len(phases)}', 'name': 'Grasp Test',
+                'tcpPose': pose_json(T_part_tcp), 'rpy': rpy_json(T_part_tcp), 'openingWidth': width_in,
+                'measuredGraspWidth': hold if inside else cand.width_mm,
+                'contactPoints': {'left': self._mm_vec(cand.contacts[0]), 'right': self._mm_vec(cand.contacts[1])},
+                'preGraspDistance': float(self.pre_mm), 'tcpOffset': self.tcp_offset_mm, 'gripMode': cand.mode,
+                'approachAxis': {'x': 0, 'y': 0, 'z': 1}, 'closingAxis': {'x': 1, 'y': 0, 'z': 0},
+                'gripperId': self.gripper, 'createdAt': int(time.time() * 1000),
+            },
+            'mode': cand.mode, 'widthMm': round(cand.width_mm, 1), 'approachTiltDeg': round(tilt, 1),
+            'score': round(cand.score, 2), 'terms': {k: round(v, 2) for k, v in cand.terms.items()},
+            'placeYawDeg': 0, 'T_tcp_part': inv(T_part_tcp).tolist(), 'T_wp_placed': np.asarray(T_wp).tolist(),
+            'durationS': round(sum(p['seconds'] for p in phases), 1), 'phases': phases, 'inspectionViews': 0,
+            'inspectionSkipped': [], 'graspTest': True,
+        }
+
+    def _clear_posture(self, T_pre, T_grasp, opening_mm, tries=60):
+        """Arm posture at the pre-grasp that is collision-free with the free-move clearance, with the fingers at
+        opening_mm (a level gripper close to the table only clears it with the fingers not wide open), nearest
+        home. Random but repeatable starting postures. None if there is none."""
+        rng = np.random.default_rng(0)
+        lo, hi = self.model.jnt_range[:N_ARM, 0], self.model.jnt_range[:N_ARM, 1]
+        best, best_d = None, np.inf
+        for _ in range(tries):
+            r = ik_solve(self.model, self.scratch, TCP_SITE, T_pre, [rng.uniform(lo, hi)], n_random=0)
+            if not r.ok or self.collision.check(r.q, opening_mm, env_clearance=ARM_CLEARANCE,
+                                                part_tol=0.001) is not None:
+                continue
+            q_g = self.planner.ik(T_grasp, [r.q])
+            if q_g is None or np.max(np.abs(q_g - r.q)) > 0.5:
+                continue
+            dist = float(np.linalg.norm(r.q - self.home))
+            if dist < best_d:
+                best, best_d = r.q, dist
+        return best
+
+    def _cavity_openings(self, cand, T_grasp, q_seed, opening_max):
+        """Approach openings for a grasp with one finger in a cavity, best first. The fingers open in 2 mm steps at
+        the grasp pose until the finger in the cavity touches the cavity's far side (limit). The best opening is
+        halfway between the grip width and that limit: the fingers then have the same room on both sides (to the
+        marked wall, and to the far side), which is the most a real part placed a few mm off can tolerate. Never so
+        wide that the finger ends up beyond the cavity (the original bug)."""
+        col, planner = self.collision, self.planner
+        hold = cand.width_mm
+        smallest = hold + 8.0
+        q_g = planner.ik(T_grasp, [q_seed])
+        if q_g is None:
+            return [smallest]
+        limit = None
+        w = hold + 4.0
+        while w < opening_max:
+            if col.check(q_g, w, part_tol=0.0, ignore_pad_contact=True) is not None:
+                limit = w
+                break
+            w += 2.0
+        limit = limit if limit is not None else opening_max
+        best = max(smallest, min(opening_max, (limit + hold) / 2.0))
+        self.status.info['cavity_room_mm'] = round((limit - hold) / 4.0, 1)
+        out = []
+        w = best
+        while w >= smallest:
+            out.append(round(w, 1))
+            w -= 4.0
+        return out or [smallest]
 
     @staticmethod
     def _mm_vec(p):
@@ -434,17 +704,21 @@ class AutoPickPlace(CadPickPlace):
         cfg, col, planner = self.cfg, self.collision, self.planner
         com = T_wp[:3, :3] @ np.asarray(self.meta['com_m']) + T_wp[:3, 3]
         place_xy = np.asarray(cfg['place_xy'], dtype=float)
-        floor = cfg['place_floor_z'] + cfg['place_clearance_m']
+        # place_release_height_m: the part is let go this high above the target floor (it drops the rest), so
+        # the gripper never goes down near the table at the drop location.
+        floor = cfg['place_floor_z'] + cfg['place_clearance_m'] + float(cfg.get('place_release_height_m', 0.0))
         lift = cfg['lift_height_m']
         last = 'target position out of reach'
 
-        for yaw in PLACE_YAWS_DEG:
+        # A level gripper (side grip) hangs far below the part: if it does not fit at the normal release height,
+        # let go a bit higher (the part drops a little further into the tray).
+        for yaw, extra in [(y, e) for e in (0.0, 0.03, 0.06) for y in PLACE_YAWS_DEG]:
             c, s = np.cos(np.radians(yaw)), np.sin(np.radians(yaw))
             Rz = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
             T_new = np.eye(4)
             T_new[:3, :3] = Rz @ T_wp[:3, :3]
             T_new[:3, 3] = Rz @ (T_wp[:3, 3] - com) + np.r_[place_xy, com[2]]
-            T_new[2, 3] += floor - self.part_min_z(T_new)
+            T_new[2, 3] += floor + extra - self.part_min_z(T_new)
             T_place = T_new @ T_part_tcp
             T_above = T_place.copy()
             T_above[2, 3] += lift
@@ -544,7 +818,8 @@ class AutoPickPlace(CadPickPlace):
                 qs = np.vstack([qs, qs])
             width_a, width_b = width_now, phase['width']
             if phase['name'] == 'grip':  # the fingers close on the part
-                width_b = plan['widthMm'] if plan['mode'] == 'outside' else plan['phases'][3]['width']
+                width_b = plan['widthMm'] if plan['mode'] == 'outside' else \
+                    next(p['width'] for p in plan['phases'] if p['name'] in ('lift', 'hold'))
             for f in range(frames):
                 s = 0.5 * (1 - np.cos(np.pi * (f + 1) / frames))
                 u = s * (len(qs) - 1)
@@ -606,15 +881,30 @@ class AutoPickPlace(CadPickPlace):
             name = phase['name']
             self.phase(name, phase['label'] + '...')
             qs = phase['q']
-            if name in ('pre-grasp', 'approach', 'retreat', 'home'):
+            if name in ('orient', 'pre-grasp', 'approach', 'retreat', 'home', 'wait'):
                 self.move(qs, phase['seconds'], fm.ctrl_for(phase['width']))
+                if name == 'wait':
+                    self.snapshot('02a_waiting_at_pick')
+            elif name == 'hold':
+                # grasp test: the part stays welded in the fixture while the closed fingers hold it
+                self.move(qs, phase['seconds'], grip_ctrl)
+                hold_err = pose_error(inv(self.part_T()) @ site_T(self.model, self.data, TCP_SITE), T_part_tcp)
+                st.info['hold_pose_error'] = {'mm': round(hold_err[0], 2), 'deg': round(hold_err[1], 2)}
+                st.info['sim_closed_width_mm'] = round(self._finger_gap_mm(), 1)
+                self.snapshot('02c_holding')
             elif name == 'grip':
                 self.step(0.4)
                 grasp_err = pose_error(inv(self.part_T()) @ site_T(self.model, self.data, TCP_SITE), T_part_tcp)
                 st.info['grasp_pose_error'] = {'mm': round(grasp_err[0], 2), 'deg': round(grasp_err[1], 2)}
                 self.snapshot('02_at_grasp')
                 self.hide_ghost()
+                # MuJoCo's soft contacts let a firmly held part creep along the fingers (~0.1 mm/s): over a long
+                # camera sequence it walks off the pad and falls. This removes that drift only; a weak grip still
+                # slips. Only while holding: after the release it would keep a part caught on a finger stuck to it.
+                self.model.opt.noslip_iterations = NOSLIP_ITERATIONS
                 self.move(qs, phase['seconds'], grip_ctrl)
+                if not plan.get('graspTest'):
+                    release_weld(self.model, self.data)   # fixture: the gripper holds the part now
                 self.step(0.6)
                 T_tcp_part0 = inv(site_T(self.model, self.data, TCP_SITE)) @ self.part_T()
                 z0 = self.part_T()[2, 3]
@@ -636,6 +926,8 @@ class AutoPickPlace(CadPickPlace):
                 images.append({'label': phase['view'], 'file': fname, 'slip_mm': round(held, 1)})
                 self.snapshot(f'03b_inspect_{len(images):02d}')
             elif name == 'release':
+                self.model.opt.noslip_iterations = 0
+                drop_payload(self.model)
                 self.move(qs, phase['seconds'], fm.ctrl_for(phase['width']))
                 self.step(0.4)
             else:
@@ -655,10 +947,13 @@ class AutoPickPlace(CadPickPlace):
 
         self.step(0.8)
         self.snapshot('04_done')
+        if plan.get('graspTest'):
+            return True, self._grasp_test_summary(plan, grasp_err, finger_error)
         T_end = self.part_T()
         px, py = cfg['place_xy']
         com_end = T_end[:3, :3] @ np.asarray(self.meta['com_m']) + T_end[:3, 3]
-        in_tray = abs(com_end[0] - px) < 0.065 and abs(com_end[1] - py) < 0.05 and self.part_min_z(T_end) < 0.03
+        in_tray = (abs(com_end[0] - px) < self.tray_half[0] and abs(com_end[1] - py) < self.tray_half[1]
+                   and self.part_min_z(T_end) < 0.03)
         st.info['part_in_tray'] = bool(in_tray)
         summary = (f"{'Part placed in the tray' if in_tray else 'Part was NOT placed in the tray'}. "
                    f"Grasp accuracy: {grasp_err[0]:.1f} mm / {grasp_err[1]:.1f} deg. "
@@ -673,6 +968,29 @@ class AutoPickPlace(CadPickPlace):
             summary += (f' Fingers on the marked points: within {finger_error[0]:.1f} mm (point 1) and '
                         f'{finger_error[1]:.1f} mm (point 2).')
         return bool(in_tray), summary
+
+    def _finger_gap_mm(self):
+        """Distance between the finger pad faces now (mm), measured as FingerMap does: the sim's closed width."""
+        m, d = self.model, self.data
+        try:
+            gb = m.body('g_base').id
+            pads = [m.geom(n).id for n in ('g_left_pad1', 'g_right_pad1')]
+        except KeyError:
+            return float('nan')
+        R = d.xmat[gb].reshape(3, 3)
+        dl, dr = (R.T @ (d.geom_xpos[g] - d.xpos[gb]) for g in pads)
+        return float((abs(dl[0] - dr[0]) - 2 * m.geom_size[pads[0]][0]) * 1000.0)
+
+    def _grasp_test_summary(self, plan, grasp_err, finger_error):
+        st = self.status
+        text = (f"Grasp test done (sim): gripper at the pick point within {grasp_err[0]:.1f} mm / "
+                f"{grasp_err[1]:.1f} deg of the plan; closed on the part (planned width {plan['widthMm']:.1f} mm, "
+                f"sim pads {st.info.get('sim_closed_width_mm', float('nan')):.1f} mm apart: sim contacts are soft and press "
+                f"in a little), held, opened and went home.")
+        if finger_error:
+            text += (f' Fingers on the marked points: within {finger_error[0]:.1f} mm (point 1) and '
+                     f'{finger_error[1]:.1f} mm (point 2).')
+        return text
 
     def _com_height(self):
         """The part's CAD origin can be anywhere on it and swings when the part turns; its centre of mass doesn't."""
@@ -742,6 +1060,8 @@ def load_request(args):
         if args.click:
             req['click'] = {'point': dict(zip('xyz', parse_vec(args.click))),
                             'normal': dict(zip('xyz', parse_vec(args.normal))) if args.normal else None}
+    if args.pick_offset:
+        req['pickOffsetMm'] = dict(zip('xyz', parse_vec(args.pick_offset)))
     if args.robot:
         req['robotId'] = args.robot
     if args.gripper:
@@ -779,7 +1099,12 @@ def points_from(req):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--mode', choices=['plan', 'preview', 'execute'], default='plan')
+    ap.add_argument('--mode', choices=['plan', 'preview', 'execute', 'real', 'home'], default='plan')
+    ap.add_argument('--robot-ip', help="real mode: the robot controller's IP, or 'fake' for a simulated robot")
+    ap.add_argument('--robot-src', help='real mode: local IP to connect from (optional)')
+    ap.add_argument('--speed', type=float, default=5.0, help='real mode: joint speed in %% (1..10)')
+    ap.add_argument('--real-gripper', action='store_true',
+                    help='real mode: drive the real Robotiq 2F-85 on USB (sim_config.json real_gripper)')
     ap.add_argument('--request', help='request.json written by the web app bridge')
     ap.add_argument('--status', help='status.json to update (polled by the web app)')
     ap.add_argument('--plan', required=True, help='plan.json: written by --mode plan, read by the other modes')
@@ -789,6 +1114,7 @@ def main():
     ap.add_argument('--normal', help='surface normal at the click, x,y,z (manual mode)')
     ap.add_argument('--point1', help='where one finger goes: x,y,z,nx,ny,nz in the part frame, mm (manual mode)')
     ap.add_argument('--point2', help='where the other finger goes (manual mode)')
+    ap.add_argument('--pick-offset', help='move the grasp by x,y,z mm in the robot base frame (web: Pick Offset)')
     ap.add_argument('--robot', choices=list(ROBOTS))
     ap.add_argument('--gripper', choices=list(GRIPPER_NAMES))
     ap.add_argument('--config', default=os.path.join(BASE_DIR, 'sim_config.json'))
@@ -807,7 +1133,16 @@ def main():
         if args.mode == 'plan':
             sim = AutoPickPlace(step, req, q_part, cfg, status, headless=True)
             point, normal = click_from(req)
-            doc = sim.compute_plan(point, normal, points=points_from(req))
+            off = req.get('pickOffsetMm') or {}
+            gp = req.get('graspPose')   # gripper pose set in the web (part frame, mm, quaternion xyzw)
+            T_gp = None
+            if gp:
+                o = gp['orientation']
+                T_gp = make_T([gp['position'][k] / 1000.0 for k in 'xyz'],
+                              quat_xyzw_to_wxyz([o[k] for k in 'xyzw']))
+            doc = sim.compute_plan(point, normal, points=points_from(req),
+                                   pick_offset_mm=[float(off.get(k, 0.0)) for k in 'xyz'], grasp_pose=T_gp)
+            doc['taughtPose'] = T_gp is not None
             tmp = args.plan + '.tmp'
             with open(tmp, 'w') as f:
                 json.dump(doc, f)
@@ -827,6 +1162,25 @@ def main():
                    preGraspDistance=plan['grasp']['preGraspDistance'], grasp=plan['grasp'])
         feed_dir = os.path.dirname(os.path.abspath(args.status)) if args.status and args.mode == 'execute' else None
         sim = AutoPickPlace(step, req, q_part, cfg, status, headless=headless, snapshots=args.snapshots, feed_dir=feed_dir)
+        if args.mode in ('real', 'home'):
+            if not args.robot_ip:
+                raise PlanError('Real mode needs --robot-ip.')
+            from real_robot import run_on_real_robot
+            try:
+                message = run_on_real_robot(sim, doc, plan, args.robot_ip, args.robot_src, args.speed,
+                                            go_home=args.mode == 'home',
+                                            gripper_cfg=(cfg.get('real_gripper') or {}) if args.real_gripper else None,
+                                            pause_at_pick_s=float(cfg.get('debug_pause_at_pick_s', 0.0)))
+            except PlanError as e:
+                # Keep the window on the real robot's last pose (no physics stepping, which would move the arm).
+                status.update('failed', str(e), state='failed', ok=False)
+                sim.overlay('REAL RUN STOPPED', str(e))
+                sim.idle_preview()
+                return 3
+            status.update('done', message, state='done', ok=True)
+            sim.overlay('AT HOME' if args.mode == 'home' else 'REAL RUN DONE', message + '  Close this window when finished.')
+            sim.idle_preview()
+            return 0
         if args.mode == 'preview':
             message = sim.preview_plan(doc, plan)
             status.update('done', message, state='done', ok=True)

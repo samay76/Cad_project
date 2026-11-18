@@ -1,6 +1,8 @@
 import mujoco
 import numpy as np
 
+from table_base import FLOOR_Z
+
 # Camera name identifiers
 CAM_FULL_VIEW = 'cam_full_view'
 CAM_WRIST = 'cam_wrist_d405'
@@ -139,8 +141,9 @@ def add_cameras(spec, include_sensor_cameras=True, wrist_body='wrist_3_link', fl
                        size=[0.007, 0.001], pos=[0.0, 0.0, 0.001],
                        rgba=[0.1, 0.25, 0.45, 1.0], contype=0, conaffinity=0)
     # Stand pole from floor up to overview camera
+    stand_h = (eye2[2] - FLOOR_Z) / 2
     spec.worldbody.add_geom(name='cam_overview_stand', type=G.mjGEOM_CYLINDER,
-                           size=[0.015, 0.85], pos=[0.35, -1.05, 0.10],
+                           size=[0.015, stand_h], pos=[0.35, -1.05, FLOOR_Z + stand_h],
                            rgba=[0.25, 0.25, 0.25, 1.0], contype=0, conaffinity=0)
 
     # -------------------------------------------------------------------------
@@ -161,9 +164,10 @@ def add_cameras(spec, include_sensor_cameras=True, wrist_body='wrist_3_link', fl
     cam3_body.add_geom(name='cam_low_angle_glass', type=G.mjGEOM_BOX,
                        size=[0.042, 0.010, 0.001], pos=[0.0, 0.0, 0.001],
                        rgba=[0.1, 0.1, 0.1, 1.0], contype=0, conaffinity=0)
-    # Low table-edge mount stand
+    # Floor stand beside the table edge (the camera is outside the table)
+    low_h = (eye3[2] - FLOOR_Z) / 2
     spec.worldbody.add_geom(name='cam_low_angle_stand', type=G.mjGEOM_CYLINDER,
-                           size=[0.012, 0.08], pos=[0.95, -0.25, 0.08],
+                           size=[0.012, low_h], pos=[0.95, -0.25, FLOOR_Z + low_h],
                            rgba=[0.25, 0.25, 0.25, 1.0], contype=0, conaffinity=0)
 
 

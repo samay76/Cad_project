@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-step_to_mesh.py - Reproducible STEP -> MuJoCo mesh conversion.
+step_to_mesh.py - Reproducible STEP (or STL / OBJ mesh) -> MuJoCo mesh conversion.
 
 Outputs (in METERS, in the part's own CAD frame - no recentring, no rotation):
   visual.stl            full-resolution triangulation (visual only)
@@ -11,6 +11,9 @@ The STEP file is read with OpenCascade (OCP) - the same kernel the web viewer
 uses (occt-import-js) - with OCCT's default length unit (mm). Every vertex is
 multiplied by 0.001, so a grasp pose exported by the web app in the part frame
 (mm) is valid here after the same 0.001 scale.
+
+Mesh parts (.stl / .obj, e.g. the camera scans from camera_scan_server.py) are read in mm like the web viewer
+shows them. Their mass properties come from the closed mesh (trimesh); an open mesh falls back to its convex hull.
 
 Usage:
   python step_to_mesh.py ../skf_cam_roller_305703_c-2z_0.stp            # -> assets/cad_parts/<hash>/
@@ -30,6 +33,7 @@ STEEL_DENSITY = 7850.0  # kg/m^3
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CACHE = os.path.join(BASE_DIR, 'assets', 'cad_parts')
 CONVERTER_VERSION = 1  # bump to invalidate cached conversions
+MESH_EXTENSIONS = ('.stl', '.obj')
 
 
 def read_step(path):
@@ -111,6 +115,43 @@ def mass_properties(shape, density):
     }
 
 
+def is_mesh_file(path):
+    return os.path.splitext(path)[1].lower() in MESH_EXTENSIONS
+
+
+def read_mesh(path):
+    """STL / OBJ in mm -> (vertices_mm Nx3, faces Mx3), duplicate vertices merged, outward winding."""
+    import trimesh
+    mesh = trimesh.load(path, force='mesh', process=True)
+    if mesh.is_empty or len(mesh.faces) == 0:
+        raise RuntimeError(f'Mesh file has no triangles: {path}')
+    if mesh.is_watertight and mesh.volume < 0:
+        mesh.invert()
+    return np.asarray(mesh.vertices, dtype=np.float64), np.asarray(mesh.faces, dtype=np.int64)
+
+
+def mesh_mass_properties(verts_mm, faces, density):
+    """Mass properties of a closed mesh (or of its convex hull if it is open), converted to SI."""
+    import trimesh
+    mesh = trimesh.Trimesh(verts_mm, faces, process=False)
+    closed = mesh.is_watertight and mesh.volume > 0
+    solid = mesh if closed else mesh.convex_hull
+    vol_mm3 = float(solid.volume)
+    if vol_mm3 <= 0:
+        raise RuntimeError('Mesh part has no volume.')
+    com = np.asarray(solid.center_mass)
+    I_mm5 = np.asarray(solid.moment_inertia) / max(float(solid.density), 1e-12)  # unit density, about the COM
+    vol_m3 = vol_mm3 * 1e-9
+    inertia = I_mm5 * 1e-15 * density
+    return {
+        'volume_m3': vol_m3,
+        'mass_kg': vol_m3 * density,
+        'com_m': (com * MM_TO_M).tolist(),
+        'fullinertia': [inertia[0, 0], inertia[1, 1], inertia[2, 2], inertia[0, 1], inertia[0, 2], inertia[1, 2]],
+        'mass_from': 'closed mesh' if closed else 'convex hull (mesh is not closed)',
+    }
+
+
 def convex_decompose(verts_m, faces, threshold, max_hulls):
     import coacd
     coacd.set_log_level('error')
@@ -132,7 +173,7 @@ def file_hash(path):
 
 
 def convert(step_path, out_dir=None, density=STEEL_DENSITY, max_hulls=24, threshold=0.04, force=False):
-    """Converts (or returns the cached conversion of) a STEP file. Returns the meta dict."""
+    """Converts (or returns the cached conversion of) a STEP, STL or OBJ file. Returns the meta dict."""
     digest = file_hash(step_path)
     key = f'{digest[:16]}_d{int(density)}_h{max_hulls}_t{threshold}_v{CONVERTER_VERSION}'
     out_dir = out_dir or os.path.join(DEFAULT_CACHE, key)
@@ -145,8 +186,13 @@ def convert(step_path, out_dir=None, density=STEEL_DENSITY, max_hulls=24, thresh
             return meta
 
     os.makedirs(out_dir, exist_ok=True)
-    shape = read_step(step_path)
-    verts_mm, faces = triangulate(shape)
+    mesh_part = is_mesh_file(step_path)
+    if mesh_part:
+        shape = None
+        verts_mm, faces = read_mesh(step_path)
+    else:
+        shape = read_step(step_path)
+        verts_mm, faces = triangulate(shape)
     verts_m = verts_mm * MM_TO_M
     write_stl(os.path.join(out_dir, 'visual.stl'), verts_m, faces)
 
@@ -157,13 +203,13 @@ def convert(step_path, out_dir=None, density=STEEL_DENSITY, max_hulls=24, thresh
         write_stl(os.path.join(out_dir, name), hv, hf)
         hull_files.append(name)
 
-    mp = mass_properties(shape, density)
+    mp = mesh_mass_properties(verts_mm, faces, density) if mesh_part else mass_properties(shape, density)
     bb_min, bb_max = verts_mm.min(axis=0), verts_mm.max(axis=0)
     meta = {
         'key': key,
         'source': os.path.abspath(step_path),
         'source_sha256': digest,
-        'units': 'm (part CAD frame, scaled 0.001 from STEP mm)',
+        'units': f"m (part CAD frame, scaled 0.001 from {'mesh' if mesh_part else 'STEP'} mm)",
         'density_kg_m3': density,
         'bbox_mm': {'min': bb_min.round(3).tolist(), 'max': bb_max.round(3).tolist(),
                     'size': (bb_max - bb_min).round(3).tolist()},

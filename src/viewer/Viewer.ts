@@ -517,6 +517,13 @@ export class Viewer {
     return this.controls;
   }
 
+  /** Moves the ground grid to this height (mm), e.g. under a fixture the part sits on; null = under the part. */
+  public setGroundZ(z: number | null) {
+    if (!this.gridHelper) return;
+    this.gridHelper.position.z = z ?? this.currentMetadata?.boundingBox.min.z ?? 0;
+    this.requestRender();
+  }
+
   public getModelRoot(): THREE.Group | null {
     return this.modelRoot;
   }

@@ -1,6 +1,7 @@
 /**
  * Left-sidebar panel for the automatic pick & place: shows where the user is in
- * Load STEP -> Mark two points -> Plan -> Preview -> Execute, and holds the actions.
+ * Load STEP / mesh or scan -> Mark two points -> Plan -> Preview -> Sim -> Real Sim, and holds the actions.
+ * Real Sim (the real EC66 follows the planned joints) is enabled only after the Sim of the same grasp ran to the end.
  * State lives in AutoPickController; this class only renders it.
  */
 export interface AutoPickPanelEvents {
@@ -10,6 +11,11 @@ export interface AutoPickPanelEvents {
   onPreviewHere: () => void;
   onPreviewRobot: () => void;
   onExecute: () => void;
+  onRealRun: () => void;
+  onGoHome: () => void;
+  onStop: () => void;
+  onRobotSettings: (settings: { ip?: string; src?: string; speed?: number; gripper?: boolean }) => void;
+  onPickOffset: (offset: { x?: number; y?: number; z?: number }) => void;
 }
 
 export interface AutoPickView {
@@ -22,6 +28,18 @@ export interface AutoPickView {
   status: { text: string; kind: 'info' | 'ok' | 'error' } | null;
   grasps: { title: string; detail: string }[];
   selected: number;
+  pickOffset: { x: number; y: number; z: number }; // mm, robot base frame, added to the grasp position
+  offsetHint: string | null; // set when the offset changed after planning
+  real: {
+    ip: string;
+    src: string;
+    speed: number;
+    gripper: boolean;
+    enabled: boolean; // Sim of this grasp has been checked and the plan is for the EC66
+    homeEnabled: boolean; // the plan is for the EC66 (Go Home needs no Sim check: it only goes to the home pose)
+    hint: string; // why it is disabled, or what it will do
+    running: boolean; // a simulator or real-robot process is running and can be stopped
+  };
 }
 
 const escapeHtml = (s: string) =>
@@ -53,9 +71,19 @@ export class AutoPickPanel {
     this.container.innerHTML = `
       <div class="sidebar-block auto-pick-block">
         <div class="block-header"><span class="block-title">AUTO PICK &amp; PLACE</span></div>
-        ${step(!!view.partName, view.partName ? '✓' : '·', view.partName ? escapeHtml(view.partName) : 'Load a STEP file (Load CAD)')}
+        ${step(!!view.partName, view.partName ? '✓' : '·', view.partName ? escapeHtml(view.partName) : 'Load a CAD file (Load CAD) or scan the part (Scan from Camera)')}
         ${view.partName ? pointStep(0) + pointStep(1) : ''}
         ${view.gripHint ? `<div id="auto-pick-grip-hint" class="auto-pick-hint ${view.gripHint.ok ? '' : 'is-bad'}">${escapeHtml(view.gripHint.text)}</div>` : ''}
+        <div class="auto-pick-real-title">PICK OFFSET (mm, robot base X / Y / Z)</div>
+        <div class="auto-pick-real-fields">
+          ${(['x', 'y', 'z'] as const)
+            .map(
+              (k) =>
+                `<label>${k.toUpperCase()}<input id="auto-pick-offset-${k}" type="number" step="0.5" min="-50" max="50" value="${view.pickOffset[k]}" ${view.busy ? 'disabled' : ''} title="Moves the gripper's pick position by this much (mm) in the robot base frame, in the Sim and on the real robot. Plan again after changing it."></label>`
+            )
+            .join('')}
+        </div>
+        ${view.offsetHint ? `<div class="auto-pick-hint is-bad">${escapeHtml(view.offsetHint)}</div>` : ''}
         <div class="auto-pick-actions">
           <button id="auto-pick-calculate" class="btn btn-primary btn-sm" ${canCalculate ? '' : 'disabled'} title="Plan the motion that puts one finger on each marked point">Plan to Points</button>
           <button id="auto-pick-clear" class="btn btn-secondary btn-sm" ${view.points.length && !view.busy ? '' : 'disabled'} title="Remove the marked points">Clear Points</button>
@@ -77,7 +105,22 @@ export class AutoPickPanel {
               <div class="auto-pick-actions">
                 <button id="auto-pick-preview-here" class="btn btn-secondary btn-sm" ${view.busy ? 'disabled' : ''} title="Play the gripper and part motion in this view">${view.playing ? 'Stop Preview' : 'Preview Here'}</button>
                 <button id="auto-pick-preview-robot" class="btn btn-secondary btn-sm" ${view.busy || view.playing ? 'disabled' : ''} title="Play the planned motion with the robot arm in a MuJoCo window, no physics">Preview Robot</button>
-                <button id="auto-pick-execute" class="btn btn-primary btn-sm auto-pick-wide" ${view.busy || view.playing ? 'disabled' : ''} title="Run the pick &amp; place with full physics in MuJoCo">Execute Pick &amp; Place</button>
+                <button id="auto-pick-execute" class="btn btn-primary btn-sm auto-pick-wide" ${view.busy || view.playing ? 'disabled' : ''} title="Run the pick &amp; place with full physics in MuJoCo (gripper included). Watch it to the end to enable Real Sim.">Sim</button>
+              </div>
+              <div class="auto-pick-real">
+                <div class="auto-pick-real-title">REAL ROBOT (Elite EC66)</div>
+                <div class="auto-pick-real-fields">
+                  <label>IP<input id="auto-pick-real-ip" type="text" value="${escapeHtml(view.real.ip)}" placeholder="192.168.1.200 or fake" ${view.busy ? 'disabled' : ''}></label>
+                  <label>From<input id="auto-pick-real-src" type="text" value="${escapeHtml(view.real.src)}" placeholder="optional" ${view.busy ? 'disabled' : ''}></label>
+                  <label>Speed %<input id="auto-pick-real-speed" type="number" min="1" max="10" step="1" value="${view.real.speed}" ${view.busy ? 'disabled' : ''}></label>
+                </div>
+                <label class="auto-pick-real-check"><input id="auto-pick-real-gripper" type="checkbox" ${view.real.gripper ? 'checked' : ''} ${view.busy ? 'disabled' : ''}> Real gripper (Robotiq 2F-85 on USB)</label>
+                <div class="auto-pick-hint">${escapeHtml(view.real.hint)}</div>
+                <div class="auto-pick-actions">
+                  <button id="auto-pick-go-home" class="btn btn-secondary btn-sm auto-pick-wide" ${view.real.homeEnabled && !view.busy && !view.playing ? '' : 'disabled'} title="Bring the real robot from wherever it is to this plan's home pose: arm straight up, turn, lower. Checked against the table first.">Go Home (real robot)</button>
+                  <button id="auto-pick-real-run" class="btn btn-primary btn-sm" ${view.real.enabled && !view.busy && !view.playing ? '' : 'disabled'} title="Move the real robot through the same joints as the Sim, with the MuJoCo window following it live">Real Sim</button>
+                  <button id="auto-pick-stop" class="btn btn-secondary btn-sm auto-pick-stop" ${view.real.running ? '' : 'disabled'} title="Stop the simulator; during Real Sim this sends stop to the robot. Keep a hand on the E-stop anyway.">Stop</button>
+                </div>
               </div>`
             : ''
         }
@@ -91,6 +134,21 @@ export class AutoPickPanel {
     on('auto-pick-preview-here', this.events?.onPreviewHere);
     on('auto-pick-preview-robot', this.events?.onPreviewRobot);
     on('auto-pick-execute', this.events?.onExecute);
+    on('auto-pick-real-run', this.events?.onRealRun);
+    on('auto-pick-go-home', this.events?.onGoHome);
+    on('auto-pick-stop', this.events?.onStop);
+    // Saved on every keystroke, so a re-render of the panel never loses what was typed.
+    const field = (id: string, apply: (v: string) => void) =>
+      this.container.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener('input', (e) => apply((e.target as HTMLInputElement).value.trim()));
+    field('auto-pick-real-ip', (ip) => this.events?.onRobotSettings({ ip }));
+    field('auto-pick-real-src', (src) => this.events?.onRobotSettings({ src }));
+    field('auto-pick-real-speed', (v) => this.events?.onRobotSettings({ speed: Number(v) }));
+    for (const k of ['x', 'y', 'z'] as const) {
+      field(`auto-pick-offset-${k}`, (v) => this.events?.onPickOffset({ [k]: Number(v) || 0 }));
+    }
+    this.container.querySelector<HTMLInputElement>('#auto-pick-real-gripper')?.addEventListener('change', (e) =>
+      this.events?.onRobotSettings({ gripper: (e.target as HTMLInputElement).checked })
+    );
     this.container.querySelectorAll<HTMLButtonElement>('.auto-pick-grasp').forEach((btn) => {
       btn.addEventListener('click', () => this.events?.onSelectGrasp(Number(btn.dataset.index)));
     });

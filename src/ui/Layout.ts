@@ -2,6 +2,7 @@ import { GRIPPERS, ROBOTS, type GripperId, type RobotId } from '../config';
 
 export interface LayoutCallbacks {
   onFileSelected: (file: File) => void;
+  onScanCameraClick?: () => void;
   onLoadGripperClick: () => void;
   onGripperSelect: (id: GripperId) => void;
   onRobotSelect: (id: RobotId) => void;
@@ -79,6 +80,14 @@ export class AppLayout {
                   <line x1="12" y1="3" x2="12" y2="15"/>
                 </svg>
                 <span>Load CAD</span>
+              </button>
+
+              <button id="btn-scan-camera" class="btn btn-gripper" title="Build the part's CAD model from the depth camera instead of loading a file">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                  <circle cx="12" cy="13" r="4"/>
+                </svg>
+                <span>Scan from Camera</span>
               </button>
 
               <!-- LOAD GRIPPER BUTTON -->
@@ -314,6 +323,10 @@ export class AppLayout {
       });
     });
 
+    this.root.querySelector('#btn-scan-camera')?.addEventListener('click', () => {
+      this.callbacks.onScanCameraClick?.();
+    });
+
     const loadGripperBtn = this.root.querySelector('#btn-load-gripper');
     if (loadGripperBtn) {
       loadGripperBtn.addEventListener('click', () => {
@@ -420,6 +433,10 @@ export class AppLayout {
 
       if (e.dataTransfer && e.dataTransfer.files.length > 0) {
         const file = e.dataTransfer.files[0];
+        if (/\.(jpe?g|png|gif|webp|bmp)$/i.test(file.name)) {
+          this.showError(`"${file.name}" is an image, not a CAD file. Drop a .step, .stp, .stl or .obj file.`, 'CAD Loading Error');
+          return;
+        }
         this.callbacks.onFileSelected(file);
       }
     });

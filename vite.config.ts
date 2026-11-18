@@ -2,6 +2,7 @@ import { defineConfig, Plugin } from 'vite';
 import fs from 'fs';
 import path from 'path';
 import { mujocoBridgePlugin } from './vite-plugins/mujocoBridge';
+import { cameraScanBridgePlugin } from './vite-plugins/cameraScanBridge';
 
 function localFileServerPlugin(): Plugin {
   return {
@@ -76,7 +77,7 @@ export default defineConfig({
       allow: ['..', '/home/human']
     }
   },
-  plugins: [mujocoBridgePlugin(), localFileServerPlugin()],
+  plugins: [mujocoBridgePlugin(), cameraScanBridgePlugin(), localFileServerPlugin()],
   optimizeDeps: {
     exclude: ['occt-import-js']
   },

@@ -15,6 +15,33 @@ MAX_JOINT_JUMP = 0.5      # rad between consecutive line poses; more means an ar
 EDGE_STEP = 0.025         # rad between collision checks along a joint-space segment
 RRT_STEP = 0.35           # rad, RRT growth step
 DENSE_STEP = 0.03         # rad between waypoints handed to the controller
+REORIENT_STEP_DEG = 3.0   # spacing of IK poses while the TCP turns in place
+
+
+def mat_to_quat(R):
+    import mujoco
+    q = np.zeros(4)
+    mujoco.mju_mat2Quat(q, np.asarray(R, dtype=float).reshape(9))
+    return q
+
+
+def quat_to_mat(q):
+    import mujoco
+    R = np.zeros(9)
+    mujoco.mju_quat2Mat(R, np.asarray(q, dtype=float))
+    return R.reshape(3, 3)
+
+
+def slerp(qa, qb, t):
+    d = float(qa @ qb)
+    if d < 0:
+        qb, d = -qb, -d
+    if d > 0.9995:
+        q = qa + t * (qb - qa)
+    else:
+        th = np.arccos(d)
+        q = (np.sin((1 - t) * th) * qa + np.sin(t * th) * qb) / np.sin(th)
+    return q / np.linalg.norm(q)
 
 
 class MotionError(Exception):
@@ -59,20 +86,63 @@ class MotionPlanner:
         """Joint path along a straight, constant-orientation TCP line from T_a (already at q_start) to T_b."""
         dist = np.linalg.norm(T_b[:3, 3] - T_a[:3, 3])
         n = max(1, int(np.ceil(dist / LINE_STEP_M)))
-        path, q = [], np.asarray(q_start, dtype=float)
+        Ts = []
         for i in range(1, n + 1):
             T = T_b.copy()
             T[:3, 3] = T_a[:3, 3] + (T_b[:3, 3] - T_a[:3, 3]) * i / n
+            Ts.append(T)
+        return self._follow(label, 'straight line', Ts, q_start, free)
+
+    def reorient(self, label, T_a, R_b, q_start, free):
+        """Joint path that turns the TCP in place from T_a's orientation (at q_start) to R_b, position fixed."""
+        qa, qb = mat_to_quat(T_a[:3, :3]), mat_to_quat(R_b)
+        angle = 2 * np.arccos(min(1.0, abs(float(qa @ qb))))
+        n = int(np.ceil(np.degrees(angle) / REORIENT_STEP_DEG))
+        Ts = []
+        for i in range(1, n + 1):
+            T = T_a.copy()
+            T[:3, :3] = quat_to_mat(slerp(qa, qb, i / n))
+            Ts.append(T)
+        return self._follow(label, 'turn in place', Ts, q_start, free)
+
+    def _follow(self, label, what, Ts, q_start, free):
+        path, q = [], np.asarray(q_start, dtype=float)
+        n = len(Ts)
+        for i, T in enumerate(Ts, 1):
             q_new = self.ik(T, [q])
             if q_new is None:
-                raise MotionError(f"'{label}': the arm cannot follow the straight line ({i}/{n}).")
+                raise MotionError(f"'{label}': the arm cannot follow the {what} ({i}/{n}).")
             if np.max(np.abs(q_new - q)) > MAX_JOINT_JUMP:
-                raise MotionError(f"'{label}': the straight line needs an arm reconfiguration ({i}/{n}).")
+                raise MotionError(f"'{label}': the {what} needs an arm reconfiguration ({i}/{n}).")
             if not segment_free(q, q_new, free):
-                raise MotionError(f"'{label}': the straight line collides ({i}/{n}).")
+                raise MotionError(f"'{label}': the {what} collides ({i}/{n}).")
             path.append(q_new)
             q = q_new
         return path
+
+    def orient_then_travel(self, q_home, T_home, q_pre, T_pre, free):
+        """Home -> turn the gripper in place (TCP stays where home puts it) to the pre-grasp orientation ->
+        straight line to the pre-grasp with that orientation held.
+
+        Planned backwards from q_pre, so the motion ends exactly in the posture the approach starts from.
+        Returns (orient, travel): joint waypoints, start postures excluded. Raises MotionError.
+        """
+        q_home, q_pre = np.asarray(q_home, dtype=float), np.asarray(q_pre, dtype=float)
+        T_turned = T_pre.copy()
+        T_turned[:3, 3] = T_home[:3, 3]
+        back = self.line('travel', T_pre, T_turned, q_pre, free)       # q_pre ... q_turned
+        q_turned = back[-1]
+        travel = back[-2::-1] + [q_pre]
+        try:
+            turn_back = self.reorient('orient', T_turned, T_home[:3, :3], q_turned, free)
+        except MotionError:
+            turn_back = []
+        if turn_back and np.max(np.abs(turn_back[-1] - q_home)) < 0.05:
+            orient = turn_back[-2::-1] + [q_turned]
+        else:
+            # Same TCP position, another arm configuration: let the joints swing over (TCP stays close by).
+            orient = self.connect('orient', q_home, q_turned, free)[1:]
+        return orient, travel
 
     def connect(self, label, qa, qb, free, time_limit=6.0):
         """Collision-free joint path from qa to qb (first and last waypoint included)."""

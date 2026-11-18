@@ -1,0 +1,67 @@
+{
+  "_comment": "testpick prototype settings. World frame = the main project's (sim_config.json): table top at z=0, robot base axis at x=y=0, arm looking along +x. Lengths in m, angles in degrees.",
+
+  "default_step": "/home/unbox-industry/Cad_project/Cad model/Part Studio 1 - Part 1 (1).step",
+  "robot": "ec66",
+  "gripper": "2f85",
+  "tcp_offset_mm": 145.0,
+  "pre_grasp_mm": 100.0,
+  "lift_height_m": 0.12,
+
+  "scan_point": [0.40, -0.12, 0.30],
+  "_scan_point_comment": "Where the part's bounding-box centre is held while scanning: 30 cm above the table top, over the free part of the table, well inside the EC66's reach.",
+
+  "camera": {
+    "_comment": "Camera shape on a post standing on the table, in front of (+x) and above the scan point, looking down at it. distance/elevation/azimuth place it relative to scan_point: azimuth 0 = camera on the +x side.",
+    "name": "scan_cam",
+    "distance_m": 0.28,
+    "elevation_deg": 45.0,
+    "azimuth_deg": 0.0,
+    "fovy_deg": 40.0
+  },
+
+  "scan": {
+    "rays_w": 100,
+    "rays_h": 75,
+    "hit_radius_m": "auto",
+    "_hit_radius_comment": "auto = 1.2 x ray spacing at the scan distance; or a number in m.",
+    "hit_radius_factor": 1.2,
+    "max_incidence_deg": 70.0,
+    "n_points": 1500,
+    "up_dot_max": 0.8,
+    "_up_dot_comment": "Points whose |normal . UP| exceeds this are top/bottom faces and are not scanned (unless --include-top-bottom).",
+    "beam_lines": 40,
+    "show_seconds": 1.2,
+    "settle_seconds": 0.5,
+    "predict_tolerance_m": 0.001
+  },
+
+  "nbv": {
+    "target_coverage": 0.98,
+    "yaw_step_deg": 30.0,
+    "tilts_deg": [0.0, 25.0, -25.0],
+    "_tilt_comment": "Tilt > 0 turns the part's top towards the camera.",
+    "min_top_angle_deg": 15.0,
+    "_min_top_comment": "A view is rejected when the part's top points within this angle of the camera, or its bottom within this angle of straight up (unless --include-top-bottom).",
+    "min_new_points": 1,
+    "max_views": 40
+  },
+
+  "motion": {
+    "free_speed_rad_s": 0.6,
+    "carry_speed_rad_s": 0.4,
+    "approach_speed_m_s": 0.03,
+    "grip_seconds": 1.5,
+    "step_mm": 10.0,
+    "step_deg": 8.0,
+    "max_joint_jump_rad": 0.5,
+    "carry_clearance_m": 0.005,
+    "settle_part_seconds": 1.5,
+    "noslip_iterations": 5
+  },
+
+  "viz": {
+    "point_radius_m": 0.0012,
+    "redraw_hz": 20.0
+  }
+}
