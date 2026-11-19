@@ -152,7 +152,7 @@ class AutoPickPlace(CadPickPlace):
 
     # ---------------- planning ----------------
     def compute_plan(self, click_point, click_normal, n_plans=3, points=None, pick_offset_mm=(0.0, 0.0, 0.0),
-                     grasp_pose=None):
+                     grasp_pose=None, touch=None):
         """pick_offset_mm: moves every grasp by this much (robot base frame, mm), set from the web's Pick Offset
         fields. It is part of the plan, so the Sim and the real robot both use it."""
         started = time.time()
@@ -172,7 +172,15 @@ class AutoPickPlace(CadPickPlace):
         self.planner = MotionPlanner(self.model, self.scratch, TCP_SITE)
         params = self.params = GraspParams(**(self.cfg.get('auto_grasp') or {}))
         self.marked_points = points
-        if grasp_pose is not None and points is not None:
+        note = ''
+        if touch is not None:
+            # Touch test: the closed fingertips go to one marked point (e.g. a number on the scale) and stop there.
+            plans, rejected, candidates, rejects = self._plan_touch(touch[0], touch[1], T_wp, n_plans)
+            if not plans:
+                why = '; '.join(f'{k} ({v}x)' for k, v in rejected.most_common(3))
+                raise PlanError(f'The fingertips cannot reach the marked point: {why}. Mark a point the gripper can '
+                                'come straight at (on a face that looks towards the robot).')
+        elif grasp_pose is not None and points is not None:
             # The user set the gripper pose in the web view (Step Jogging, position and orientation): plan exactly
             # that grasp, or say why not. No other grasp is tried in its place.
             plans, rejected, candidates, rejects = self._plan_taught_pose(grasp_pose, points, T_wp, mesh)
@@ -237,6 +245,7 @@ class AutoPickPlace(CadPickPlace):
             'gripper': self.gripper, 'gripperLabel': GRIPPER_NAMES[self.gripper],
             'tcpOffset': self.tcp_offset_mm,
             'click': None if click_point is None else (np.asarray(click_point) * 1000).tolist(),
+            'touch': touch is not None,
             'points': None if points is None else [(p * 1000).tolist() for p, _ in points],
             'pickOffsetMm': (self.pick_offset * 1000).tolist(),
             'awayFromClick': bool(note),
@@ -510,6 +519,114 @@ class AutoPickPlace(CadPickPlace):
             'durationS': round(duration, 1), 'phases': phases,
         }
 
+
+    def _fingertip_z(self):
+        """How far the closed fingertips reach beyond the TCP along the approach axis (m)."""
+        from .gripper_geometry import GripperGeometry
+        m, s = self.model, self.scratch
+        s.qpos[:N_ARM] = self.home
+        self.fingers.set_qpos(s.qpos, 0.0)
+        mujoco.mj_kinematics(m, s)
+        T_tcp_world = inv(site_T(m, s, TCP_SITE))
+        fingers = [g for g in range(m.ngeom) if m.geom_contype[g]
+                   and m.body(m.geom_bodyid[g]).name.startswith(('g_left', 'g_right'))]
+        return max(GripperGeometry._bounds(m, s, g, T_tcp_world)[1][2] for g in fingers)
+
+    def _plan_touch(self, point, normal, T_wp, n_plans=3):
+        """Touch test (config touch_test): the closed fingertips come straight at `point` (part frame, m) along the
+        surface normal and stop standoff_mm before it, hold, back out the same way and go home. Tries the gripper
+        turned about the approach axis in 45 deg steps; returns (plans, rejected reasons, [], Counter())."""
+        tt = {'standoff_mm': 2.0, 'hold_s': 5.0, **(self.cfg.get('touch_test') or {})}
+        col, planner = self.collision, self.planner
+        col.set_part(T_wp)
+        R = T_wp[:3, :3]
+        p_w = R @ np.asarray(point, dtype=float) + T_wp[:3, 3]
+        n_w = R @ np.asarray(normal, dtype=float)
+        n_w /= np.linalg.norm(n_w)
+        standoff = float(tt['standoff_mm']) / 1000.0
+        tip = self._fingertip_z()
+        z = -n_w                                               # TCP +Z (approach) points into the surface
+        ref = np.array([0.0, 0.0, 1.0]) if abs(z[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+        x0 = np.cross(ref, z)
+        x0 /= np.linalg.norm(x0)
+        y0 = np.cross(z, x0)
+        pos = p_w + n_w * (standoff + tip)                     # fingertips standoff before the point
+        pre_mm = float(self.pre_mm)
+        approach_s = self.pick_seconds(pre_mm / 1000.0, 'approach_speed_m_s', 1.5)
+        hold_s = float(tt['hold_s'])
+        # fingertips must not touch the part on the way in (they stop short of it by design)
+        tol = -0.0005 if standoff >= 0.001 else 0.001
+        rejected, plans = Counter(), []
+        for k in range(8):
+            a = np.radians(45.0 * k)
+            x = np.cos(a) * x0 + np.sin(a) * y0
+            T_touch = np.eye(4)
+            T_touch[:3, :3] = np.column_stack([x, np.cross(z, x), z])
+            T_touch[:3, 3] = pos
+            T_pre = T_touch @ make_T([0, 0, -pre_mm / 1000.0], [1, 0, 0, 0])
+            q_pre = planner.ik(T_pre, [self.home])
+            side = z[2] > -np.cos(np.radians(30.0))
+            if side and (q_pre is None or col.check(q_pre, 0.0, env_clearance=ARM_CLEARANCE) is not None):
+                q_pre = self._clear_posture(T_pre, T_touch, 0.0)
+            if q_pre is None:
+                rejected['out of reach'] += 1
+                continue
+            hit = col.check(q_pre, 0.0, env_clearance=ARM_CLEARANCE)
+            if hit is not None:
+                rejected[part_reason(hit)] += 1
+                continue
+            try:
+                approach = planner.line('approach', T_pre, T_touch, q_pre,
+                                        lambda q: col.check(q, 0.0, part_tol=tol) is None)
+                orient, pre_path = self._path_to_pre(q_pre, T_pre, 0.0)
+            except MotionError as e:
+                rejected['approach blocked' if 'collides' in str(e) else 'out of reach'] += 1
+                continue
+            except CandidateRejected as e:
+                rejected[str(e)] += 1
+                continue
+            q_touch = approach[-1]
+            to_pre = self._pick_phases(orient, pre_path, 0.0, T_pre)
+            back = []
+            for q in [*reversed(pre_path), *(reversed(orient) if orient is not None else []), self.home]:
+                q = np.asarray(q, dtype=float)
+                if not back or np.max(np.abs(q - back[-1])) > 1e-6:
+                    back.append(q)
+            phases = [
+                *to_pre,
+                self._phase('approach', approach, 0.0, False, CARRY_SPEED, minimum=approach_s,
+                            label='Coming straight at the point (fingers closed)'),
+                self._phase('wait', [q_touch], 0.0, False, seconds=hold_s,
+                            label=f'At the point ({tt["standoff_mm"]:g} mm before it): holding {hold_s:.0f} s'),
+                self._phase('retreat', approach[::-1], 0.0, False, CARRY_SPEED, minimum=approach_s,
+                            label='Backing out along the approach line'),
+                self._phase('home', back, 0.0, False, FREE_SPEED, minimum=max(1.5, sum(p['seconds'] for p in to_pre))),
+            ]
+            for ph in phases:
+                self._add_tcp_samples(ph, T_wp)
+            T_part_tcp = inv(T_wp) @ T_touch
+            tilt = float(np.degrees(np.arccos(np.clip(-z[2], -1, 1))))
+            plans.append({
+                'grasp': {
+                    'id': f'touch_{int(time.time() * 1000)}_{k}', 'name': 'Touch Test',
+                    'tcpPose': pose_json(T_part_tcp), 'rpy': rpy_json(T_part_tcp), 'openingWidth': 0.0,
+                    'measuredGraspWidth': 0.0, 'contactPoints': {}, 'preGraspDistance': pre_mm,
+                    'tcpOffset': self.tcp_offset_mm, 'gripMode': 'outside', 'approachAxis': {'x': 0, 'y': 0, 'z': 1},
+                    'closingAxis': {'x': 1, 'y': 0, 'z': 0}, 'gripperId': self.gripper,
+                    'createdAt': int(time.time() * 1000),
+                },
+                'mode': 'outside', 'widthMm': 0.0, 'approachTiltDeg': round(tilt, 1), 'score': -0.1 * k,
+                'terms': {}, 'placeYawDeg': 0, 'T_tcp_part': inv(T_part_tcp).tolist(),
+                'T_wp_placed': np.asarray(T_wp).tolist(),
+                'durationS': round(sum(ph['seconds'] for ph in phases), 1), 'phases': phases,
+                'touch': {'pointMm': (np.asarray(point) * 1000).round(2).tolist(),
+                          'normal': np.round(np.asarray(normal, dtype=float), 4).tolist(),
+                          'standoffMm': float(tt['standoff_mm']), 'fingertipMm': round(tip * 1000, 2),
+                          'rollDeg': 45 * k},
+            })
+            if len(plans) >= n_plans:
+                break
+        return plans, rejected, [], Counter()
 
     def _path_to_pre(self, q_pre, T_pre, width_in):
         """Free-space move home -> pre-grasp, with the part still in place: first turn the gripper at home to the
@@ -846,6 +963,8 @@ class AutoPickPlace(CadPickPlace):
                 self.move(qs, phase['seconds'], fm.ctrl_for(phase['width']))
                 if name == 'wait':
                     self.snapshot('02a_waiting_at_pick')
+                    if plan.get('touch'):
+                        st.info['touch'] = self._touch_error(plan['touch'], T_wp)
             elif name == 'hold':
                 # grasp test: the part stays welded in the fixture while the closed fingers hold it
                 self.move(qs, phase['seconds'], grip_ctrl)
@@ -896,6 +1015,11 @@ class AutoPickPlace(CadPickPlace):
         self.snapshot('04_done')
         if plan.get('graspTest'):
             return True, self._grasp_test_summary(plan, grasp_err, finger_error)
+        if plan.get('touch'):
+            t = st.info.get('touch') or {}
+            return True, (f"Touch test done (sim): the fingertips stopped {t.get('to_surface_mm', float('nan')):.1f} mm "
+                          f"from the surface (planned {plan['touch']['standoffMm']:g} mm), "
+                          f"{t.get('sideways_mm', float('nan')):.1f} mm sideways of the marked point; then home.")
         T_end = self.part_T()
         px, py = cfg['place_xy']
         com_end = T_end[:3, :3] @ np.asarray(self.meta['com_m']) + T_end[:3, 3]
@@ -909,6 +1033,18 @@ class AutoPickPlace(CadPickPlace):
             summary += (f' Fingers on the marked points: within {finger_error[0]:.1f} mm (point 1) and '
                         f'{finger_error[1]:.1f} mm (point 2).')
         return bool(in_tray), summary
+
+    def _touch_error(self, touch, T_wp):
+        """Where the closed fingertips are vs the marked point (sim): distance to the surface along its normal and
+        sideways of the point, mm."""
+        T = site_T(self.model, self.data, TCP_SITE)
+        tip = T[:3, 3] + T[:3, 2] * touch['fingertipMm'] / 1000.0
+        p = T_wp[:3, :3] @ (np.asarray(touch['pointMm']) / 1000.0) + T_wp[:3, 3]
+        n = T_wp[:3, :3] @ np.asarray(touch['normal'], dtype=float)
+        d = tip - p
+        along = float(d @ n)
+        side = float(np.linalg.norm(d - along * n))
+        return {'to_surface_mm': round(along * 1000, 2), 'sideways_mm': round(side * 1000, 2)}
 
     def _finger_gap_mm(self):
         """Distance between the finger pad faces now (mm), measured as FingerMap does: the sim's closed width."""
@@ -1078,7 +1214,13 @@ def main():
                 o = gp['orientation']
                 T_gp = make_T([gp['position'][k] / 1000.0 for k in 'xyz'],
                               quat_xyzw_to_wxyz([o[k] for k in 'xyzw']))
-            doc = sim.compute_plan(point, normal, points=points_from(req),
+            marked = points_from(req)
+            touch = None
+            if req.get('mode') == 'touch':   # one point: the closed fingertips go there (touch test)
+                if not marked:
+                    raise PlanError('Mark the point the fingertips should go to.')
+                touch, marked = marked[0], None
+            doc = sim.compute_plan(point, normal, points=marked, touch=touch,
                                    pick_offset_mm=[float(off.get(k, 0.0)) for k in 'xyz'], grasp_pose=T_gp)
             doc['taughtPose'] = T_gp is not None
             tmp = args.plan + '.tmp'
@@ -1086,6 +1228,11 @@ def main():
                 json.dump(doc, f)
             os.replace(tmp, args.plan)
             best = doc['plans'][0]
+            if doc.get('touch'):
+                status.update('done', f"{len(doc['plans'])} touch motion(s) planned in {doc['seconds']:.0f} s: the "
+                                      f"closed fingertips stop {best['touch']['standoffMm']:g} mm before the point, "
+                                      f"approach {best['approachTiltDeg']:.0f} deg from vertical.", state='done', ok=True)
+                return 0
             status.update('done', f"{doc['note']}{len(doc['plans'])} complete motion(s) planned in {doc['seconds']:.0f} s. Best "
                                   f"grasp: {best['mode']} grip, {best['widthMm']:.1f} mm wide, approach "
                                   f"{best['approachTiltDeg']:.0f} deg from vertical.", state='done', ok=True)

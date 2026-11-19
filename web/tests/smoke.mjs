@@ -17,7 +17,11 @@ const port = 8766;
 const base = `http://127.0.0.1:${port}`;
 const python = process.env.CELL_PYTHON || process.env.MUJOCO_PYTHON || 'python3';
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cell-smoke-'));
-const ref = JSON.parse(fs.readFileSync(path.join(repo, 'tests', 'fixtures', 'main_part_request.json'), 'utf8'));
+const touch = !!process.env.SMOKE_TOUCH; // the scale: Touch mode, one point on its face (cad/scale.step)
+const ref = touch
+  ? { points: [{ point: { x: -28.4, y: -23.33, z: 80 }, normal: { x: 0, y: 1, z: 0 } }] }
+  : JSON.parse(fs.readFileSync(path.join(repo, 'tests', 'fixtures', 'main_part_request.json'), 'utf8'));
+const partFile = path.join(repo, 'cad', touch ? 'scale.step' : 'main_part.step');
 
 const fail = (msg) => {
   console.error(`SMOKE FAIL: ${msg}`);
@@ -56,14 +60,19 @@ try {
   await page.goto(base);
 
   // Load the part
-  await page.setInputFiles('#cad-file-input', path.join(repo, 'cad', 'main_part.step'));
+  await page.setInputFiles('#cad-file-input', partFile);
   await waitFor(() => page.evaluate(() => !!window.__viewer?.getModelRoot()), 60000, 'part loaded');
-  await waitFor(
-    () => page.evaluate(() => !!window.__viewer.getScene().getObjectByName('pick_fixture')),
-    60000,
-    'fixture shown'
-  );
-  console.log('ok: part loaded, fixture shown under it');
+  if (touch) {
+    await page.click('.auto-pick-mode [data-mode="touch"]');
+    console.log('ok: scale loaded (it is the fixture), Touch mode');
+  } else {
+    await waitFor(
+      () => page.evaluate(() => !!window.__viewer.getScene().getObjectByName('pick_fixture')),
+      60000,
+      'fixture shown'
+    );
+    console.log('ok: part loaded, fixture shown under it');
+  }
 
   // Mark the two reference points: project them (part frame, mm) to the screen and click there
   for (const [i, m] of ref.points.entries()) {
@@ -100,7 +109,7 @@ try {
     'plan finished'
   );
   const status = await page.textContent('#auto-pick-status');
-  if (!/complete motion/i.test(status)) fail(`planning: ${status}`);
+  if (!/motion\(s\) planned/i.test(status)) fail(`planning: ${status}`);
   else console.log(`ok: ${status.trim().slice(0, 140)}`);
 
   const shots = process.env.SMOKE_SHOTS;

@@ -60,6 +60,11 @@ class GraspTest(_M):
     hold_closed_s: float = Field(10.0, ge=0, le=600)
 
 
+class TouchTest(_M):
+    standoff_mm: float = Field(2.0, ge=0, le=50)
+    hold_s: float = Field(5.0, ge=0, le=120)
+
+
 class PickMotion(_M):
     home_joints_deg: dict
     orient_first: bool = True
@@ -90,6 +95,7 @@ class CellConfig(_M):
     robot_base_offset_mm: dict
     gripper_coupling_mm: dict
     grasp_test: GraspTest
+    touch_test: TouchTest = TouchTest()
     pick_motion: PickMotion
     lift_height_m: float = Field(gt=0, le=0.4)
     settle_seconds: float = Field(ge=0, le=10)

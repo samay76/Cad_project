@@ -21,6 +21,7 @@ export interface GraspPlan {
   score: number;
   durationS: number;
   graspTest?: boolean; // config grasp_test: go, close, hold, open, home (no lift / place)
+  touch?: { pointMm: number[]; standoffMm: number; rollDeg: number }; // touch test: fingertips to one point
   T_tcp_part: number[][];
   phases: PlanPhase[];
 }
@@ -59,7 +60,8 @@ export interface PlanRequest {
   gripperId: string;
   tcpOffset: number;
   preGraspDistance: number;
-  points: MarkedPoint[];
+  points: MarkedPoint[]; // grip: one per finger; touch: the one point the fingertips go to
+  mode: 'grip' | 'touch';
   pickOffsetMm: { x: number; y: number; z: number }; // added to the grasp position, robot base frame
   graspPose: Pose | null; // gripper pose set in the view (part frame, mm): planned exactly when given
 }

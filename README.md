@@ -93,9 +93,22 @@ them ~0.15 s behind, interpolated (`cell/web_view.py`, `web/src/autopick/LiveVie
   This is for measuring the sim-to-real gap.
 - `false`: pick, lift `lift_height_m`, carry to the tray at `place_xy`, release and go home.
 
+### Touch test (the scale)
+
+`cad/scale.step` is the cell's fixture: a 55 mm base plate with an upright that has numbers on its faces. Load it
+as the part too, choose **Touch (1 point)** in the Auto Pick panel and click a number: **Plan to Point** plans the
+closed fingertips coming straight at it along the face's normal, stopping `touch_test.standoff_mm` (2 mm) before it,
+holding `hold_s` (5 s), backing out and going home. Sim reports where the fingertips stopped (distance to the face
+and sideways of the point); on the real robot, look at the scale. Click a face that looks towards the robot (+y).
+Up to three ways are planned (the gripper turned about the approach axis); pick one in the list.
+
 ### Parts and the fixture
 
-`pick_station` in `config/cell.json`: `Fixture.step` is bolted over the corner hole near `near_xy`.
+`pick_station` in `config/cell.json`: the fixture (now `cad/scale.step`) is bolted on the four small table holes
+(15,0) (15,1) (16,0) (16,1), counted from the hole at the lowest x and y on the 40 mm grid. The sim puts its screw
+holes on those table holes, centred between them like a bolted plate (worst hole 0.15 mm off: the scale's CAD hole
+spacing is 40.09 x 40.25 mm). A fixture without a round column collides with its own convex pieces. When the part
+loaded is the fixture itself, it is drawn once. The previous round fixture is `tests/fixtures/Fixture.step`.
 With `seat_all_parts: true`, every part is placed on it by its CAD coordinates, so **each part's STEP must be
 exported in the fixture's coordinate frame** (e.g. from the assembly with the fixture). A part that would float above
 the fixture or sit below the table is refused with a message saying so. The part's turn about the vertical axis

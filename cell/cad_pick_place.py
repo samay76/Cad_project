@@ -237,7 +237,9 @@ class CadPickPlace:
             c = R @ np.asarray(self.meta['com_m'])
             status.info['pick_station'] = {'pick_xy_mm': [round(v * 1000, 1) for v in placement['pick_xy']],
                                            'top_mm': round(self.support_z * 1000, 1),
-                                           'hole_error_mm': placement['hole_error_mm']}
+                                           'hole_error_mm': placement['hole_error_mm'],
+                                           'table_holes': placement['table_holes'],
+                                           'fixture': os.path.basename(placement['file'])}
         px, py = cfg['pick_xy']
         part_pos = [px - c[0], py - c[1], self.support_z - rv.min(0)[2] + 0.002]
         # Fixture: the part made for it (pick_station.seated_part) goes on it as the two STEPs fit together, held
@@ -251,7 +253,9 @@ class CadPickPlace:
                 raise PlanError(f'The part is tilted {tilt:.0f} deg in the view, but on the fixture it can only turn '
                                 'about the vertical (Z) axis. Reset its X/Y rotation in the Part Pose tab.')
             part_yaw = float(np.degrees(np.arctan2(R_web[1, 0], R_web[0, 0])))
-            self.station = (self.station[0], dict(self.station[1], part_yaw_deg=part_yaw))
+            from .step_to_mesh import file_hash
+            same = file_hash(step_path) == file_hash(self.station[1]['file'])   # the fixture loaded as the part
+            self.station = (self.station[0], dict(self.station[1], part_yaw_deg=part_yaw, same_as_part=same))
             part_pos, q_seat = seated_pose(self.station[1])
             part_world_quat_wxyz = np.asarray(q_seat)
             R = make_T([0, 0, 0], part_world_quat_wxyz)[:3, :3]
@@ -365,8 +369,9 @@ class CadPickPlace:
         if T_wp[2, 3] > self.support_z - 0.05:   # still on it (a cup may rest with the column in its cavity)
             return
         info = self.station[0]
-        column_d = 2 * info['column_radius_mm']
-        if np.linalg.norm(com[:2] - np.asarray(self.cfg['pick_xy'])) < info['column_radius_mm'] / 1000.0:
+        column_r = info.get('column_radius_mm') or 25.0
+        column_d = 2 * column_r
+        if np.linalg.norm(com[:2] - np.asarray(self.cfg['pick_xy'])) < column_r / 1000.0:
             raise PlanError(f'The part slid down over the pick station column: its opening is wider than the '
                             f'column (Ø{column_d:.0f} mm). Turn it so it rests on the column top, or use a station '
                             f'with a wider top.')

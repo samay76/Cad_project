@@ -33,7 +33,7 @@ from .table_base import HOLE_GRID_ORIGIN, HOLE_GRID_PITCH, HOLE_GRID_MAX
 G = mujoco.mjtGeom
 DEFAULT_STEP = os.path.join(CAD, 'Fixture.step')
 CACHE_DIR = os.path.join(CACHE, 'pick_station')
-CONVERTER_VERSION = 2          # 2: + top disc (fixtures with a wider top than the column)
+CONVERTER_VERSION = 3          # 2: + top disc; 3: fixtures without a column (anchor = plate centre)
 MAX_HOLE_ERROR_MM = 1.0       # a station hole further than this from a table hole does not fit a screw
 STATION_BODY = 'pickstation'  # fixture mode: the station geoms are on this static body (for the contact exclude)
 FIXTURE_WELD = 'fixture_hold'  # fixture mode: weld part <-> station, released when the gripper has closed
@@ -83,15 +83,13 @@ def analyse(step_path):
     if not vertical:
         raise RuntimeError(f'{step_path}: no vertical cylinders (column / screw holes) found')
 
-    # Column: the tallest vertical cylinder reaching the top. Screw holes: full cylinders through the
-    # base plate (they start at the bottom face), smaller than the column.
-    column = max(vertical, key=lambda c: (c[4] - c[3], c[0]))
-    plate_top = min(c[4] for c in vertical if c[3] <= lo[2] + 0.01 and c is not column)
-    # A screw hole is a full circle (possibly split into several faces); the rounded plate corners are
-    # quarter cylinders of a similar radius, so they are told apart by how much of the circle they cover.
+    height = hi[2] - lo[2]
+    # Screw holes: full circles (possibly split into several faces) through the base plate: they start at the bottom
+    # face and are short. The rounded plate corners are quarter cylinders of a similar radius, so they are told
+    # apart by how much of the circle they cover.
     arcs = {}
     for r, x, y, z0, z1, a, b in vertical:
-        if r < 0.5 * column[0] and z0 <= lo[2] + 0.01 and z1 <= plate_top + 0.01:
+        if z0 <= lo[2] + 0.01 and z1 - z0 < 0.5 * height:
             k = (round(x, 2), round(y, 2), round(r, 2))
             a0, b0 = arcs.get(k, (a, b))
             arcs[k] = (np.minimum(a0, a), np.maximum(b0, b))
@@ -104,18 +102,31 @@ def analyse(step_path):
     hole_r, hole_xy = max(sizes.items(), key=lambda kv: (len(kv[1]), kv[0]))
     if len(hole_xy) < 2:
         raise RuntimeError(f'{step_path}: fewer than 2 screw holes found in the base plate')
+    plate_top = min(z1 for r, x, y, z0, z1, a, b in vertical
+                    if z0 <= lo[2] + 0.01 and abs(r - hole_r) < 1e-3 and (round(x, 2), round(y, 2)) in
+                    {(round(px, 2), round(py, 2)) for px, py in hole_xy})
+
+    # Column (optional): the tallest vertical cylinder above the plate, wider than a screw hole. Fixtures without
+    # one (a plate with an upright, e.g. a scale) are anchored at the plate centre and collide with their own
+    # convex pieces (add_to_spec).
+    cols = [c for c in vertical if c[0] > hole_r + 0.5 and c[4] - c[3] > 0.3 * height]
+    column = max(cols, key=lambda c: (c[4] - c[3], c[0])) if cols else None
 
     # Top disc: a vertical cylinder wider than the column that ends at the top face (a fixture's locating
     # spigot). None for a plain column.
-    tops = [c for c in vertical if c is not column and abs(c[4] - hi[2]) < 0.01 and c[0] > column[0] + 0.5
-            and abs(c[1] - column[1]) < 0.5 and abs(c[2] - column[2]) < 0.5]
-    top = max(tops, key=lambda c: c[0]) if tops else None
+    top = None
+    if column is not None:
+        tops = [c for c in vertical if c is not column and abs(c[4] - hi[2]) < 0.01 and c[0] > column[0] + 0.5
+                and abs(c[1] - column[1]) < 0.5 and abs(c[2] - column[2]) < 0.5]
+        top = max(tops, key=lambda c: c[0]) if tops else None
+    anchor = [column[1], column[2]] if column is not None else [float((lo[0] + hi[0]) / 2), float((lo[1] + hi[1]) / 2)]
 
     v, f = triangulate(shape, linear_deflection_mm=0.1, angular_deflection=0.3)
     return {
         'top_disc_mm': None if top is None else {'radius': top[0], 'z0': top[3]},
         'holes_mm': [list(p) for p in sorted(hole_xy)], 'hole_radius_mm': hole_r,
-        'column_xy_mm': [column[1], column[2]], 'column_radius_mm': column[0],
+        'column_xy_mm': None if column is None else [column[1], column[2]],
+        'column_radius_mm': None if column is None else column[0], 'anchor_xy_mm': anchor,
         'top_z_mm': float(hi[2]), 'bottom_z_mm': float(lo[2]),
         'plate_mm': {'min': [lo[0], lo[1]], 'max': [hi[0], hi[1]], 'top_z': plate_top},
     }, v, f
@@ -148,14 +159,15 @@ def _rot(yaw_deg):
 
 
 def place(info, near_xy, yaw_deg=0.0):
-    """Where the station goes: its screw holes on table holes, its column as close to near_xy as that allows.
+    """Where the station goes: its screw holes on table holes, its anchor (column, else plate centre) as close to
+    near_xy as that allows.
 
     Returns dict(pos_xy (m, station origin in the world), yaw_deg, pick_xy (m, column axis), support_z (m, top
     face), hole_error_mm (worst station hole vs its table hole), holes_world_mm).
     """
     R = _rot(yaw_deg)
     holes = np.asarray(info['holes_mm'], dtype=float) @ R.T          # station holes, rotated, mm
-    column = R @ np.asarray(info['column_xy_mm'], dtype=float)
+    column = R @ np.asarray(info.get('anchor_xy_mm') or info['column_xy_mm'], dtype=float)
     pitch = HOLE_GRID_PITCH * 1000.0
     g0, gmax = np.asarray(HOLE_GRID_ORIGIN) * 1000.0, np.asarray(HOLE_GRID_MAX) * 1000.0
     target = np.asarray(near_xy, dtype=float) * 1000.0
@@ -182,10 +194,16 @@ def place(info, near_xy, yaw_deg=0.0):
     if best is None:
         raise ValueError(f'The pick station does not fit on the table hole grid near {near_xy}.')
     _, t, err, world = best
+    # Bolted down, the plate settles between its screws: centre it on its table holes (least squares) instead of
+    # putting the first hole exactly on one and letting the hole-spacing error pile up on the others.
+    t = t + np.mean(snap(world) - world, axis=0)
+    world = holes + t
+    err = float(np.max(np.linalg.norm(world - snap(world), axis=1)))
     return {'pos_xy': (t / 1000.0).tolist(), 'yaw_deg': float(yaw_deg),
             'pick_xy': ((column + t) / 1000.0).tolist(),
             'support_z': (info['top_z_mm'] - info['bottom_z_mm']) / 1000.0,
-            'hole_error_mm': round(err, 2), 'holes_world_mm': np.round(world, 1).tolist()}
+            'hole_error_mm': round(err, 2), 'holes_world_mm': np.round(world, 1).tolist(),
+            'table_holes': [[int(v) for v in np.round((h - g0) / pitch)] for h in snap(world)]}
 
 
 def _abs(path):
@@ -245,6 +263,7 @@ def from_config(cfg):
     placement = place(info, ps.get('near_xy', cfg['pick_xy']), ps.get('yaw_deg', 0.0))
     placement['seated_part'] = _abs(ps['seated_part']) if ps.get('seated_part') else None
     placement['bottom_z_mm'] = info['bottom_z_mm']
+    placement['file'] = _abs(ps.get('file', DEFAULT_STEP))
     placement['seat_all_parts'] = bool(ps.get('seat_all_parts', False))
     if placement['hole_error_mm'] > MAX_HOLE_ERROR_MM:
         print(f"[pick_station] warning: its screw holes miss the table holes by up to "
@@ -267,8 +286,10 @@ def add_to_spec(spec, info, placement, seat_part=False):
         return (R @ (np.asarray(p_mm, dtype=float) / 1000.0) + [tx, ty]).tolist()
 
     spec.add_mesh(name='pickstation_visual', file=info['visual_stl'])
+    # The fixture loaded as the part too (e.g. the scale): the part draws it, the fixture only collides.
+    shown = 0.0 if placement.get('same_as_part') else 1.0
     w.add_geom(name='pickstation_visual', type=G.mjGEOM_MESH, meshname='pickstation_visual',
-               pos=[tx, ty, z0], quat=quat, rgba=[0.55, 0.62, 0.75, 1], contype=0, conaffinity=0, group=0)
+               pos=[tx, ty, z0], quat=quat, rgba=[0.55, 0.62, 0.75, shown], contype=0, conaffinity=0, group=0)
     hidden = dict(group=3, rgba=[0.55, 0.62, 0.75, 0.0])
     pl = info['plate_mm']
     lo, hi = np.asarray(pl['min']), np.asarray(pl['max'])
@@ -276,11 +297,20 @@ def add_to_spec(spec, info, placement, seat_part=False):
     w.add_geom(name='pickstation_plate', type=G.mjGEOM_BOX,
                size=[*((hi - lo) / 2000.0).tolist(), plate_h / 2],
                pos=[*world_xy((lo + hi) / 2), plate_h / 2], quat=quat, **hidden)
-    col_h = (info['top_z_mm'] - pl['top_z']) / 1000.0
-    w.add_geom(name='pickstation_column', type=G.mjGEOM_CYLINDER,
-               size=[info['column_radius_mm'] / 1000.0, col_h / 2],
-               pos=[*world_xy(info['column_xy_mm']), plate_h + col_h / 2], friction=[1.0, 0.005, 0.0001],
-               **hidden)
+    if info.get('column_xy_mm') is not None:
+        col_h = (info['top_z_mm'] - pl['top_z']) / 1000.0
+        w.add_geom(name='pickstation_column', type=G.mjGEOM_CYLINDER,
+                   size=[info['column_radius_mm'] / 1000.0, col_h / 2],
+                   pos=[*world_xy(info['column_xy_mm']), plate_h + col_h / 2], friction=[1.0, 0.005, 0.0001],
+                   **hidden)
+    else:
+        # No column: the fixture's own convex pieces (CoACD, as for parts), in its STEP frame
+        from .step_to_mesh import convert
+        meta = convert(placement['file'])
+        for i, hull in enumerate(meta['collision_hulls']):
+            m = spec.add_mesh(name=f'pickstation_hull_{i:02d}', file=os.path.join(meta['dir'], hull))
+            w.add_geom(name=f'pickstation_hull_{i:02d}', type=G.mjGEOM_MESH, meshname=m.name, pos=[tx, ty, z0],
+                       quat=quat, friction=[1.0, 0.005, 0.0001], **hidden)
     top = info.get('top_disc_mm')
     if top:
         h = (info['top_z_mm'] - top['z0']) / 1000.0

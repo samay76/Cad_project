@@ -3,15 +3,15 @@
   "pick_xy": [0.4996, -0.3402],
   "_pick_xy_comment": "Pick location (part's centre of mass) = big table hole (15, 0), the last open corner hole on the camera side (corner A; (16, 0) is under the pendant holder's bracket). Was [0.45, -0.10].",
   "pick_station": {
-    "_comment": "The part is picked from the pick station (pickstation.step, repo root). Its screw holes are put on the table's 40 mm hole grid, at the grid position nearest near_xy; the part sits on the column top, centre of mass over the column axis (this replaces pick_xy). enabled=false puts the part back on the table at pick_xy.",
+    "_comment": "The fixture bolted on the table. Its screw holes are put on the table's 40 mm hole grid at the position nearest near_xy, centred between them (least squares). enabled=false puts the part on the table at pick_xy.",
     "enabled": true,
-    "file": "cad/Fixture.step",
+    "file": "cad/scale.step",
     "near_xy": [0.4996, -0.3402],
     "yaw_deg": 0,
-    "seated_part": "cad/main_part.step",
+    "seated_part": "cad/scale.step",
     "seat_all_parts": true,
     "_seat_all_comment": "true: EVERY part loaded in the web goes on the fixture the way main_part does (its STEP frame = the fixture's STEP frame), because all parts share the same mounting; only the pick points change. Each part's STEP must be exported in the fixture's coordinate frame. false: only seated_part goes on it.",
-    "_fixture_comment": "Fixture.step bolted over the big corner hole at pick_xy (its 4 screw holes on the table grid). seated_part = the part made for it: it goes on the fixture as the two STEPs fit together (same CAD frame), held until the gripper closes. Other parts sit on the fixture top."
+    "_fixture_comment": "cad/scale.step (the numbered scale) is bolted on the 4 small table holes (15,0) (15,1) (16,0) (16,1), counted from the hole at the lowest x and y (40 mm grid). It is also loaded as the part: mark a number in the web (Touch) and the closed fingertips go to it. The old Fixture.step is in tests/fixtures."
   },
   "place_xy": [0.55, 0.15],
   "place_floor_z": 0.006,
@@ -41,6 +41,11 @@
     "_comment": "Sim, Preview Robot, Real Sim and Go Home are shown live in the web app's 3D view (the same cell as MuJoCo). mujoco_window: also open the MuJoCo window on this PC.",
     "enabled": true,
     "mujoco_window": false
+  },
+  "touch_test": {
+    "_comment": "Touch mode in the web (one marked point, e.g. a number on the scale): the closed fingertips come straight at the point along its surface normal, stop standoff_mm before it, hold hold_s, back out and go home.",
+    "standoff_mm": 2.0,
+    "hold_s": 5
   },
   "grasp_test": {
     "_comment": "Sim-to-real grasp check. enabled=true: Sim and Real Sim only go to the taught pick point, wait wait_before_close_s, close the gripper on the part in the fixture, hold hold_closed_s, open, back out along the approach line and go home. No lift, camera or place. false = the full pick, camera and place again.",

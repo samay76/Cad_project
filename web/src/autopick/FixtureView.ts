@@ -52,9 +52,11 @@ export class FixtureView {
     } catch {
       info = null; // no bridge (static build): nothing to show
     }
-    const match =
-      !!info && !!partBuffer && (!!info.seatAll || (await sha256(partBuffer)) === info.seatedSha256);
-    if (!match || !info) {
+    const partSha = partBuffer ? await sha256(partBuffer) : null;
+    const match = !!info && !!partBuffer && (!!info.seatAll || partSha === info.seatedSha256);
+    // The fixture loaded as the part itself (e.g. the scale): the part already is the fixture, draw it once.
+    const isFixture = !!info && partSha === (await sha256(base64ToBuffer(info.base64)));
+    if (!match || !info || isFixture) {
       this.remove();
       return false;
     }

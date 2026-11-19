@@ -566,6 +566,10 @@ def run_on_real_robot(sim, doc, plan, ip, src=None, speed=REAL_SPEED_DEFAULT, go
                     'Real Sim can start now.')
         grip_text = ('Real gripper: ' + '; '.join(grip_notes) + '.') if gripper is not None and grip_notes else \
             ('The gripper was not driven (shown in the sim only).' if gripper is None else '')
+        if plan.get('touch'):
+            return (f"Real touch test done: the fingertips went to the marked point "
+                    f"({plan['touch']['standoffMm']:g} mm before it), held, and came back home ({n_moves} moves, "
+                    f"{time.time() - t_begin:.0f} s{', FAKE robot' if fake else ''}). Check on the scale where they stopped.")
         if grasp_test:
             return (f"Real grasp test done: pick point, wait, close, hold, open, home ({n_moves} moves, "
                     f"{time.time() - t_begin:.0f} s{', FAKE robot' if fake else ''}). {grip_text}")

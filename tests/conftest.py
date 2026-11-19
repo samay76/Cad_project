@@ -20,10 +20,14 @@ def run_job(args, cwd=REPO, timeout=600):
         return proc.returncode, json.load(f)
 
 
-def write_config(tmp_path, name='cell.json', **changes):
-    """A copy of config/cell.json with top-level sections updated (e.g. grasp_test={'enabled': False})."""
+def write_config(tmp_path, name='cell.json', cell_fixture=False, **changes):
+    """A copy of config/cell.json with top-level sections updated (e.g. grasp_test={'enabled': False}).
+    The pick tests use the round fixture main_part.step was made for; cell_fixture=True keeps the cell's (the scale)."""
     with open(CONFIG) as f:
         cfg = json.load(f)
+    if not cell_fixture:
+        cfg['pick_station'] = {**cfg['pick_station'], 'file': 'tests/fixtures/Fixture.step',
+                               'seated_part': 'cad/main_part.step'}
     for key, value in changes.items():
         if isinstance(value, dict) and isinstance(cfg.get(key), dict):
             cfg[key] = {**cfg[key], **value}

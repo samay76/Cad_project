@@ -46,6 +46,7 @@ const MIN_POINT_DISTANCE_MM = 2;
 export const SIM_PART_FILE = /\.(stp|step|stl|obj)$/i;
 const REAL_SETTINGS_KEY = 'autopick.realRobot';
 const PICK_OFFSET_KEY = 'autopick.pickOffset';
+const MODE_KEY = 'autopick.mode';
 type PickOffset = { x: number; y: number; z: number };
 
 function loadPickOffset(): PickOffset {
@@ -89,6 +90,14 @@ export class AutoPickController {
   private simChecked: string | null = null;
   private processRunning = false;
   private live: LiveView; // Sim / Real Sim shown live in the 3D view
+  /** grip: two marked points, one per finger; touch: the closed fingertips go to one marked point */
+  private mode: 'grip' | 'touch' = (() => {
+    try {
+      return localStorage.getItem(MODE_KEY) === 'touch' ? 'touch' : 'grip';
+    } catch {
+      return 'grip';
+    }
+  })();
 
   constructor(
     private panel: AutoPickPanel,
@@ -107,7 +116,8 @@ export class AutoPickController {
       onGoHome: () => this.goHome(),
       onStop: () => this.stop(),
       onRobotSettings: (settings) => this.setRealSettings(settings),
-      onPickOffset: (offset) => this.setPickOffset(offset)
+      onPickOffset: (offset) => this.setPickOffset(offset),
+      onMode: (mode) => this.setMode(mode)
     });
     this.refresh();
   }
@@ -147,6 +157,7 @@ export class AutoPickController {
   }
 
   private gripCue() {
+    if (this.mode === 'touch') return null;
     return describeGrip(this.points, GRIPPERS[this.deps.getGripperId()].maxOpeningWidth);
   }
 
@@ -154,10 +165,21 @@ export class AutoPickController {
   public markPoint(click: ClickedPointInfo) {
     if (this.live.active) return; // clicks in the live cell do not mark points
     if (!click.fromSurfaceClick || this.busy || this.preview.playing) return;
-    if (this.points.length === 2) this.points = [];
+    if (this.points.length === (this.mode === 'touch' ? 1 : 2)) this.points = [];
     this.points.push({ point: click.point, normal: click.normal });
     this.resetOffset();
     this.invalidate();
+  }
+
+  private setMode(mode: 'grip' | 'touch') {
+    if (mode === this.mode || this.busy) return;
+    this.mode = mode;
+    try {
+      localStorage.setItem(MODE_KEY, mode);
+    } catch {
+      // ignore storage errors
+    }
+    this.clearPoints();
   }
 
   public clearPoints() {
@@ -184,6 +206,7 @@ export class AutoPickController {
     const { name, buffer } = this.deps.getPart();
     this.panel.render({
       partName: buffer ? name : null,
+      mode: this.mode,
       points: this.points.map((m) => `(${m.point.x.toFixed(1)}, ${m.point.y.toFixed(1)}, ${m.point.z.toFixed(1)}) mm`),
       pointColors: POINT_COLORS,
       gripHint: this.gripCue(),
@@ -195,7 +218,9 @@ export class AutoPickController {
       offsetHint: this.jogHint() ?? (this.offsetChanged() ? 'The pick offset changed after planning. Press Plan to Points again.' : null),
       real: { ...this.real, ...this.realState(), running: this.processRunning },
       grasps: (this.doc?.plans ?? []).map((plan, i) => ({
-        title: `Grasp ${i + 1}: ${plan.mode} grip, ${plan.widthMm.toFixed(1)} mm`,
+        title: plan.touch
+          ? `Touch ${i + 1}: gripper turned ${plan.touch.rollDeg}°, stops ${plan.touch.standoffMm} mm before`
+          : `Grasp ${i + 1}: ${plan.mode} grip, ${plan.widthMm.toFixed(1)} mm`,
         detail:
           `Approach ${plan.approachTiltDeg.toFixed(0)}° from vertical, ${plan.durationS.toFixed(0)} s motion` +
           (plan.graspTest ? ' (grasp test)' : '')
@@ -216,9 +241,12 @@ export class AutoPickController {
       return { enabled: false, homeEnabled, hint: 'Run Sim for this grasp and let it finish to enable Real Sim. Go Home brings the robot to the home pose Real Sim starts from.' };
     }
     const who = this.real.ip === 'fake' ? 'a simulated robot (fake)' : `the robot at ${this.real.ip}`;
-    const grip = this.real.gripper
-      ? 'The real gripper closes at the grasp and opens at the drop.'
-      : 'The gripper moves in the sim only.';
+    const touching = !!this.doc?.plans[this.selected]?.touch;
+    const grip = !this.real.gripper
+      ? 'The gripper moves in the sim only.'
+      : touching
+        ? 'The real gripper closes before the arm moves (closed fingertips go to the point).'
+        : 'The real gripper closes at the grasp and opens at the drop.';
     return {
       enabled: true,
       homeEnabled,
@@ -303,9 +331,13 @@ export class AutoPickController {
     if (!SIM_PART_FILE.test(name)) {
       return this.fail('Automatic pick & place needs a STEP (.step/.stp) or mesh (.stl/.obj, in mm) part.');
     }
-    if (this.points.length !== 2) return this.fail('Mark two points on the part, one for each finger.');
-    const [a, b] = this.points.map((m) => new THREE.Vector3(m.point.x, m.point.y, m.point.z));
-    if (a.distanceTo(b) < MIN_POINT_DISTANCE_MM) return this.fail('The two points are in the same place. Mark one point for each finger.');
+    const touch = this.mode === 'touch';
+    if (touch && this.points.length !== 1) return this.fail('Mark the point the fingertips should go to.');
+    if (!touch) {
+      if (this.points.length !== 2) return this.fail('Mark two points on the part, one for each finger.');
+      const [a, b] = this.points.map((m) => new THREE.Vector3(m.point.x, m.point.y, m.point.z));
+      if (a.distanceTo(b) < MIN_POINT_DISTANCE_MM) return this.fail('The two points are in the same place. Mark one point for each finger.');
+    }
     if (!grasp) return this.fail('The gripper is still loading. Try again in a moment.');
 
     const jogged = this.gripperJog(); // read before the plan is cleared (calculate() applies it below)
@@ -355,8 +387,9 @@ export class AutoPickController {
         tcpOffset: state.tcpOffset,
         preGraspDistance: state.preGraspDistance,
         points: this.points,
+        mode: this.mode,
         pickOffsetMm: { ...this.pickOffset },
-        graspPose: this.taughtPose
+        graspPose: touch ? null : this.taughtPose
       });
       this.plannedOffset = { ...this.pickOffset };
       this.runId = runId;
@@ -489,7 +522,7 @@ export class AutoPickController {
             `- Teach pendant in REMOTE mode, robot stopped, no alarms\n` +
             `- Work area clear; keep a hand on the E-stop\n` +
             (gripper
-              ? `- The REAL gripper (USB) closes at the grasp and opens at the drop; if it is not activated, ` +
+              ? `- The REAL gripper (USB) ${plan.touch ? 'closes before the arm moves (touch test)' : 'closes at the grasp and opens at the drop'}; if it is not activated, ` +
                 `it first closes and opens once. Keep clear of the jaws.\n\n`
               : `- The gripper is NOT driven (only shown in the sim)\n\n`) +
             `Stop in the web app sends stop to the robot.`

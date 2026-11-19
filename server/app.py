@@ -3,7 +3,7 @@ app.py - HTTP API of the pick cell and the built web app, in one server.
 
 The API is the one the web app calls (web/src/autopick/api.ts); each job runs as a child process (jobs.py):
 
-  POST /api/mujoco/auto/plan   part file + two marked points -> plans in the background; returns { runId }
+  POST /api/mujoco/auto/plan   part file + marked points (grip: 2, touch: 1) -> plans in the background; { runId }
   GET  /api/mujoco/auto/plan?id=<runId>   plan.json of that run
   POST /api/mujoco/auto/run    { runId, candidate, mode: 'preview' | 'execute' }   MuJoCo window on this PC
   POST /api/mujoco/auto/real   { runId, candidate, robotIp, robotSrc?, speed, gripper?, action?: 'real' | 'home' }
@@ -31,7 +31,7 @@ from typing import List, Literal, Optional
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from .jobs import JobRunner
 from .settings import REPO, load_settings
@@ -72,9 +72,16 @@ class PlanBody(BaseModel):
     gripperId: str = Field(pattern=IDENT)
     tcpOffset: Optional[float] = None
     preGraspDistance: Optional[float] = None
-    points: List[MarkedPoint] = Field(min_length=2, max_length=2)
+    points: List[MarkedPoint] = Field(min_length=1, max_length=2)
+    mode: Literal['grip', 'touch'] = 'grip'   # touch: the closed fingertips go to the one marked point
     pickOffsetMm: Optional[Vec3] = None
     graspPose: Optional[Pose] = None
+
+    @model_validator(mode='after')
+    def _count(self):
+        if len(self.points) != (1 if self.mode == 'touch' else 2):
+            raise ValueError('mark one point for touch, two points (one per finger) for grip')
+        return self
 
 
 class RunBody(BaseModel):
@@ -175,7 +182,7 @@ def create_app(settings=None):
                 'partFile': part_path, 'partFileName': b.partFileName,
                 'partWorldPose': b.partWorldPose.model_dump() if b.partWorldPose else None,
                 'robotId': b.robotId, 'gripperId': b.gripperId, 'tcpOffset': b.tcpOffset,
-                'preGraspDistance': b.preGraspDistance, 'points': [p.model_dump() for p in b.points],
+                'preGraspDistance': b.preGraspDistance, 'points': [p.model_dump() for p in b.points], 'mode': b.mode,
                 'pickOffsetMm': (b.pickOffsetMm or Vec3(x=0, y=0, z=0)).model_dump(),
                 'graspPose': b.graspPose.model_dump() if b.graspPose else None,
             }, f, indent=2)
