@@ -327,6 +327,9 @@ def add_to_spec(spec, info, placement, seat_part=False):
         eq = spec.add_equality(name=FIXTURE_WELD, type=mujoco.mjtEq.mjEQ_WELD, objtype=mujoco.mjtObj.mjOBJ_BODY,
                                name1=STATION_BODY, name2=PART_BODY, active=True)
         eq.data[:11] = [0.0, 0.0, 0.0, *pos, *quat, 1.0]
+        # Bolted means rigid: the default weld lets the part sag ~0.6 mm and tilt ~0.4 deg under its weight
+        eq.solref = [0.004, 1.0]
+        eq.solimp = [0.99, 0.999, 0.001, 0.5, 2.0]
 
 
 if __name__ == '__main__':

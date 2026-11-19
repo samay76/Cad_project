@@ -146,6 +146,13 @@ class AutoPickPlace(CadPickPlace):
                 break
             self.step(0.25)
             waited += 0.25
+        if self.seated:
+            # Held in the fixture: it is exactly where the fixture is bolted. The sim's weld is a little soft (the
+            # part sags ~0.6 mm and tilts ~0.4 deg), so plan from the exact pose, and put the part back there.
+            self._set_part_qpos(self.seat_T)
+            self.data.qvel[self.free_joint_dof:self.free_joint_dof + 6] = 0
+            mujoco.mj_forward(self.model, self.data)
+            return self.seat_T.copy()
         T = self.part_T()
         self.check_on_support(T)
         return T
@@ -521,16 +528,24 @@ class AutoPickPlace(CadPickPlace):
 
 
     def _fingertip_z(self):
-        """How far the closed fingertips reach beyond the TCP along the approach axis (m)."""
-        from .gripper_geometry import GripperGeometry
+        """How far the closed fingertips reach beyond the TCP along the approach axis (m): the finger meshes' furthest
+        point (as calibrate_fit measures it)."""
         m, s = self.model, self.scratch
         s.qpos[:N_ARM] = self.home
         self.fingers.set_qpos(s.qpos, 0.0)
         mujoco.mj_kinematics(m, s)
-        T_tcp_world = inv(site_T(m, s, TCP_SITE))
-        fingers = [g for g in range(m.ngeom) if m.geom_contype[g]
-                   and m.body(m.geom_bodyid[g]).name.startswith(('g_left', 'g_right'))]
-        return max(GripperGeometry._bounds(m, s, g, T_tcp_world)[1][2] for g in fingers)
+        T = site_T(m, s, TCP_SITE)
+        reach = []
+        for g in range(m.ngeom):
+            name = m.body(m.geom_bodyid[g]).name
+            if (not name.startswith('g_') or m.geom_type[g] != mujoco.mjtGeom.mjGEOM_MESH or m.geom_group[g] >= 3
+                    or m.geom_rgba[g][3] == 0):
+                continue
+            k = m.geom_dataid[g]
+            a, n = m.mesh_vertadr[k], m.mesh_vertnum[k]
+            v = m.mesh_vert[a:a + n] @ s.geom_xmat[g].reshape(3, 3).T + s.geom_xpos[g]
+            reach.append(((v - T[:3, 3]) @ T[:3, 2]).max())
+        return float(max(reach))
 
     def _plan_touch(self, point, normal, T_wp, n_plans=3):
         """Touch test (config touch_test): the closed fingertips come straight at `point` (part frame, m) along the

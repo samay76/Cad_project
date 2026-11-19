@@ -274,6 +274,7 @@ class CadPickPlace:
             self.station = (self.station[0], dict(self.station[1], part_yaw_deg=part_yaw, same_as_part=same))
             part_pos, q_seat = seated_pose(self.station[1])
             part_world_quat_wxyz = np.asarray(q_seat)
+            self.seat_T = make_T(part_pos, part_world_quat_wxyz)   # bolted: exactly here (see AutoPickPlace.settle)
             R = make_T([0, 0, 0], part_world_quat_wxyz)[:3, :3]
             rv = self.part_verts @ R.T
             self._check_seat_fit(part_pos, rv, self.station[1], status)
