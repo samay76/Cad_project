@@ -598,12 +598,20 @@ export class AutoPickController {
   private watch(runId: string, onEnd: (ok: boolean, message: string, st?: SimStatus) => void, onUpdate?: (st: SimStatus) => void) {
     this.stopPolling();
     let lastMessage = '';
+    let failures = 0;
     this.pollTimer = window.setInterval(async () => {
       let st;
       try {
         st = await fetchStatus(runId);
+        failures = 0;
       } catch {
-        return; // server restarting; keep polling
+        // server restarting: keep polling, but not forever (an unreadable status would block every button)
+        if (++failures * POLL_MS < 30000 || this.pollTimer === null) return;
+        this.stopPolling();
+        this.processRunning = false;
+        this.live.finish(false, 'Lost contact with the cell server.');
+        onEnd(false, `Could not read the job's status for 30 s (see var/runs/${runId}/log.txt). Is the cell server running?`);
+        return;
       }
       if (this.pollTimer === null) return; // stopped while the request was in flight
       onUpdate?.(st);

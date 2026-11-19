@@ -990,7 +990,7 @@ class AutoPickPlace(CadPickPlace):
                 z0 = self.part_T()[2, 3]
                 if doc.get('points'):
                     finger_error = self._finger_to_points(doc['points'])
-                    st.info['finger_to_point_mm'] = [round(e, 1) for e in finger_error]
+                    st.info['finger_to_point_mm'] = [round(e, 1) if np.isfinite(e) else None for e in finger_error]
             elif name == 'release':
                 self.model.opt.noslip_iterations = 0
                 drop_payload(self.model)
@@ -1030,8 +1030,9 @@ class AutoPickPlace(CadPickPlace):
                    f"Grasp accuracy: {grasp_err[0]:.1f} mm / {grasp_err[1]:.1f} deg. "
                    f"Slip during transport: {slip[0]:.1f} mm / {slip[1]:.1f} deg.")
         if finger_error:
-            summary += (f' Fingers on the marked points: within {finger_error[0]:.1f} mm (point 1) and '
-                        f'{finger_error[1]:.1f} mm (point 2).')
+            summary += ' Fingers on the marked points: ' + ' and '.join(
+                (f'within {e:.1f} mm' if np.isfinite(e) else 'no finger contact') + f' (point {i + 1})'
+                for i, e in enumerate(finger_error)) + '.'
         return bool(in_tray), summary
 
     def _touch_error(self, touch, T_wp):
@@ -1065,8 +1066,9 @@ class AutoPickPlace(CadPickPlace):
                 f"sim pads {st.info.get('sim_closed_width_mm', float('nan')):.1f} mm apart: sim contacts are soft and press "
                 f"in a little), held, opened and went home.")
         if finger_error:
-            text += (f' Fingers on the marked points: within {finger_error[0]:.1f} mm (point 1) and '
-                     f'{finger_error[1]:.1f} mm (point 2).')
+            text += ' Fingers on the marked points: ' + ' and '.join(
+                (f'within {e:.1f} mm' if np.isfinite(e) else 'no finger contact') + f' (point {i + 1})'
+                for i, e in enumerate(finger_error)) + '.'
         return text
 
     def _finger_to_points(self, points_mm):

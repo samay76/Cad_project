@@ -60,6 +60,21 @@ class PlanError(Exception):
 # --------------------------------------------------------------------------------------------
 # Status reporting (read by the web app through the Vite bridge)
 # --------------------------------------------------------------------------------------------
+def _finite(v):
+    """v with every non-finite float (inf, NaN) replaced by None, so it is valid JSON."""
+    if isinstance(v, dict):
+        return {k: _finite(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_finite(x) for x in v]
+    if isinstance(v, (float, np.floating)):
+        return float(v) if np.isfinite(v) else None
+    if isinstance(v, np.integer):
+        return int(v)
+    if isinstance(v, np.ndarray):
+        return _finite(v.tolist())
+    return v
+
+
 class Status:
     def __init__(self, path):
         self.path = path
@@ -73,7 +88,8 @@ class Status:
                 'time': time.time()}
         tmp = self.path + '.tmp'
         with open(tmp, 'w') as f:
-            json.dump(body, f, indent=2)
+            # inf / NaN are not JSON: the web app could not read the status at all (and would wait forever)
+            json.dump(_finite(body), f, indent=2, allow_nan=False)
         os.replace(tmp, self.path)
 
 
