@@ -23,7 +23,7 @@
   "real_gripper": {"_comment": "Robotiq 2F-85 on the laptop's USB/RS-485 adapter, used by Real Sim when 'Real gripper' is ticked. speed / force 0..255 (64 = slow).",
                    "port": "/dev/ttyUSB0", "baud": 115200, "slave": 9, "speed": 64, "force": 50},
   "robot_base_offset_mm": {"_comment": "Calibration: where the REAL robot base is relative to the table, compared with the table CAD, as [x, y, z] mm (z > 0: it stands higher). The sim moves the arm by this, so the planner sends the real arm to the real part. Measure with: python calibrate_robot.py (touch a table hole with the closed fingertips). Was a guessed 20 mm height.",
-                           "ec66": [0.0, 0.0, 20.0]},
+                           "ec66": [-6.2, -6.6, 21.8]},
   "gripper_coupling_mm": {"_comment": "Coupling plate between the tool flange and the gripper on the real robot (mm), measured: 22 mm. Sim TCP from the flange = 22 + 10.8 (2F-85 base) + 145 = 177.8 mm (pendant tool point: 178.8).",
                           "ec66": {"2f85": 22.0}},
   "collision_hulls": {"_comment": "How finely each part's collision shape follows the CAD (convex pieces, CoACD). 24 / 0.04 filled about a quarter of main_part's cup, so a finger planned inside it 'hit the part'; 48 / 0.02 leaves it open. The first run of a part converts it (about 30 s), then it is cached.",
