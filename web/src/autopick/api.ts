@@ -88,7 +88,7 @@ const post = async (url: string, body: unknown): Promise<string> => {
 
 export const startPlan = (request: PlanRequest) => post('/api/mujoco/auto/plan', request);
 
-export const startRun = (runId: string, candidate: number, mode: 'preview' | 'execute') =>
+export const startRun = (runId: string, candidate: number, mode: 'preview' | 'approach' | 'execute') =>
   post('/api/mujoco/auto/run', { runId, candidate, mode });
 
 export const fetchPlan = async (runId: string): Promise<PlanDocument> => {

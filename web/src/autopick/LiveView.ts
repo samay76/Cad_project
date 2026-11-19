@@ -271,6 +271,7 @@ export class LiveView {
         body.position.set(f[o], f[o + 1], f[o + 2]);
         body.quaternion.set(f[o + 4], f[o + 5], f[o + 6], f[o + 3]);
       });
+      if (!this.viewer.getModelRoot()) this.frameWorkspace(false); // app start: show the whole workspace
       this.viewer.requestRender();
       return;
     }
@@ -380,8 +381,15 @@ export class LiveView {
       body.quaternion.slerpQuaternions(qa, qb, s);
     });
     if (!this.framed) {
-      // frame the workspace: arm, gripper, part, fixture, tray, robot base (not the table, it is much bigger)
       this.framed = true;
+      this.frameWorkspace(true);
+    }
+    this.viewer.requestRender();
+  };
+
+  /** Camera on the workspace: arm, gripper, part, fixture, tray, robot base (not the table, it is much bigger). */
+  private frameWorkspace(animate: boolean) {
+    {
       this.root.updateMatrixWorld(true);
       const box = new THREE.Box3();
       this.bodies.forEach((b) => box.union(new THREE.Box3().setFromObject(b)));
@@ -394,9 +402,8 @@ export class LiveView {
       if (!box.isEmpty()) {
         // from in front of the robot (sim world +x, a little to the side, from above), in the view's frame
         const dir = new THREE.Vector3(1.0, -0.55, 0.75).transformDirection(this.root.matrixWorld);
-        this.viewer.fitToBox(box.expandByScalar(60), true, dir);
+        this.viewer.fitToBox(box.expandByScalar(60), animate, dir);
       }
     }
-    this.viewer.requestRender();
-  };
+  }
 }

@@ -88,7 +88,7 @@ class PlanBody(BaseModel):
 class RunBody(BaseModel):
     runId: str
     candidate: int = Field(0, ge=0)
-    mode: Literal['preview', 'execute']
+    mode: Literal['preview', 'approach', 'execute']
 
 
 class RealBody(BaseModel):

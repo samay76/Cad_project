@@ -131,6 +131,14 @@ def mesh_files(step_path=TABLE_STEP, out_dir=CACHE_DIR):
         return []
     try:
         print('[table_base] converting Table_base.step (one-time, ~15 s)...', file=sys.stderr)
+        if step_path == TABLE_STEP and out_dir == CACHE_DIR:
+            # In a clean process: OpenCascade crashes on this big STEP once MuJoCo & co. are loaded in the same one.
+            import subprocess
+            r = subprocess.run([sys.executable, '-m', 'cell.table_base'], cwd=os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), capture_output=True, text=True, timeout=600)
+            if r.returncode != 0:
+                raise RuntimeError(f'converter exited with {r.returncode}')
+            return mesh_files(step_path, out_dir) if os.path.exists(meta_path) else []
         return convert(step_path, out_dir)
     except Exception as e:  # missing OCP/trimesh, unreadable file: the sim still runs on the boxes
         print(f'[table_base] could not convert the table STEP ({e}): table drawn as plain boxes', file=sys.stderr)

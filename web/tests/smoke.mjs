@@ -58,6 +58,11 @@ try {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(base);
+  const shotsEarly = process.env.SMOKE_SHOTS;
+  await waitFor(() => page.evaluate(() => (window.__viewer?.getScene().getObjectByName('live_cell')?.children.length ?? 0) > 10), 180000, 'workspace at start');
+  await page.waitForTimeout(1500);
+  if (shotsEarly) await page.screenshot({ path: path.join(shotsEarly, 'app_start.png') });
+  console.log('ok: the app opens in the workspace');
 
   // Load the part
   await page.setInputFiles('#cad-file-input', partFile);
@@ -103,14 +108,20 @@ try {
 
   // Plan
   await page.click('#auto-pick-calculate');
+  // planning, then the arm drives to the pick point by itself (approach) and stays there
   await waitFor(
-    async () => (await page.getAttribute('#cell-log .log-entry:last-child', 'class'))?.match(/is-ok|is-error/),
-    180000,
-    'plan finished'
+    async () => /gripper is at the pick point|error|cannot|could not/i.test((await page.textContent('#cell-log')) || '') &&
+      (await page.getAttribute('#cell-log .log-entry:last-child', 'class'))?.match(/is-ok|is-error/),
+    240000,
+    'plan + arm at the pick point'
   );
-  const status = await page.textContent('#cell-log .log-entry:last-child');
-  if (!/motion\(s\) planned/i.test(status)) fail(`planning: ${status}`);
-  else console.log(`ok: ${status.trim().slice(0, 140)}`);
+  const log = (await page.textContent('#cell-log')) || '';
+  const planned = log.match(/\d+ (touch|complete) motion\(s\) planned[^.]*/i)?.[0];
+  if (!planned) fail(`planning: ${log.slice(-300)}`);
+  else console.log(`ok: ${planned}`);
+  if (!/gripper is at the pick point/i.test(log)) fail('the arm did not go to the pick point');
+  else console.log('ok: the arm drove to the pick point after planning');
+  if (shotsEarly) await page.screenshot({ path: path.join(shotsEarly, 'teach_arm_at_point.png') });
 
   const shots = process.env.SMOKE_SHOTS;
   if (shots) await page.screenshot({ path: path.join(shots, 'teach_planned.png') });

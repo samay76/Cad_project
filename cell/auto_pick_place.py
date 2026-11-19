@@ -881,7 +881,10 @@ class AutoPickPlace(CadPickPlace):
             pts += [site_T_of(self.model, self.scratch, qs[i])[:3, 3] for i in range(0, len(qs), step)]
         return pts
 
-    def preview_plan(self, doc, plan):
+    def preview_plan(self, doc, plan, until=None, speed=None):
+        """until: stop after this phase and stay there (e.g. 'approach': the gripper at the pick point)."""
+        if speed:
+            self.speed = float(speed)
         """Plays the plan with no physics: what you see is the planned motion, frame by frame."""
         self.open_viewer()
         m, d = self.model, self.data
@@ -934,6 +937,9 @@ class AutoPickPlace(CadPickPlace):
                 if self.web is not None:
                     self.web.frame(d, clock, force=True)
             self.snapshot(f"preview_{k + 1:02d}_{phase['name']}")
+            if until is not None and phase['name'] == until:
+                return ('The gripper is at the pick point (fingers open). Check it, then press Simulation; '
+                        'or move it with Step Jogging and plan again.')
         return f"Preview finished: {plan['durationS']:.0f} s of motion, nothing was simulated."
 
     def idle_preview(self):
@@ -1188,7 +1194,7 @@ def points_from(req):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--mode', choices=['plan', 'preview', 'execute', 'real', 'home'], default='plan')
+    ap.add_argument('--mode', choices=['plan', 'preview', 'approach', 'execute', 'real', 'home'], default='plan')
     ap.add_argument('--robot-ip', help="real mode: the robot controller's IP, or 'fake' for a simulated robot")
     ap.add_argument('--robot-src', help='real mode: local IP to connect from (optional)')
     ap.add_argument('--speed', type=float, default=5.0, help='real mode: joint speed in %% (1..10)')
@@ -1284,6 +1290,10 @@ def main():
             status.update('done', message, state='done', ok=True)
             sim.overlay('AT HOME' if args.mode == 'home' else 'REAL RUN DONE', message + '  Close this window when finished.')
             sim.idle_preview()
+            return 0
+        if args.mode == 'approach':   # after planning: the arm drives to the pick point and stays there
+            message = sim.preview_plan(doc, plan, until='approach', speed=2.0)
+            status.update('done', message, state='done', ok=True)
             return 0
         if args.mode == 'preview':
             message = sim.preview_plan(doc, plan)

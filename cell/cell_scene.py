@@ -33,6 +33,8 @@ def build_cell(cfg=None):
     if os.path.exists(os.path.join(out, 'scene.json')):
         return out
     os.makedirs(out, exist_ok=True)
+    # STEP files first: OpenCascade crashes once MuJoCo has built a model in the same process
+    info, placement = station_from_config(cfg)
     coupling = float(cfg['gripper_coupling_mm'][ROBOT][GRIPPER])
     model = build(robot=ROBOT, coupling_mm=coupling, base_offset_mm=tuple(robot_base_offset(cfg, ROBOT)),
                   tray_xy=cfg['place_xy'], tray_half=tray_half_for(np.zeros((1, 3)), np.zeros(3), cfg),
@@ -42,7 +44,6 @@ def build_cell(cfg=None):
     FingerMap(model, home).set_qpos(data.qpos, 85.0)      # open, as at home
     data.qpos[:6] = home
     mujoco.mj_forward(model, data)
-    info, placement = station_from_config(cfg)
     if placement is not None:
         pos, quat = seated_pose(dict(placement, part_yaw_deg=0.0))
         T_part = make_T(pos, quat)

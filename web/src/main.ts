@@ -291,7 +291,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Load the gripper on startup, but wait for the user to choose a CAD file.
-  loadGripperModel().catch(() => {
-    // loadGripperModel reports failures through the UI.
-  });
+  loadGripperModel()
+    .then(() => graspController?.setVisible(false)) // you teach with the arm's own gripper (in the workspace)
+    .catch(() => {
+      // loadGripperModel reports failures through the UI.
+    });
+  autoPick.showCell(); // open straight into the workspace: table, EC66 at home, room
 });

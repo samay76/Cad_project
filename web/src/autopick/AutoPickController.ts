@@ -91,6 +91,7 @@ export class AutoPickController {
   private simChecked: string | null = null;
   private processRunning = false;
   private live: LiveView; // Sim / Real Sim shown live in the 3D view
+  private jogGhost = false; // the teaching gripper is shown (Step Jogging) until the next plan
   /** grip: two marked points, one per finger; touch: the closed fingertips go to one marked point */
   private mode: 'grip' | 'touch' = (() => {
     try {
@@ -123,6 +124,7 @@ export class AutoPickController {
   /** Teaching in the workspace: the cell (table, EC66 at home, room) around the loaded part. */
   public showCell() {
     this.live.showCell();
+    if (!this.jogGhost) this.deps.getGraspController()?.setVisible(false);
   }
 
   /** While the live cell is shown: the teaching part, fixture, gripper and plan drawing are hidden. */
@@ -131,7 +133,8 @@ export class AutoPickController {
     if (root) root.visible = !hide;
     const fixture = this.deps.viewer.getScene().getObjectByName('pick_fixture');
     if (fixture) fixture.visible = !hide;
-    this.deps.getGraspController()?.setVisible(!hide);
+    // The arm's own gripper is the one you see; the teaching gripper only shows while you jog it (until you plan).
+    this.deps.getGraspController()?.setVisible(this.jogGhost);
     this.preview.setVisible(!hide);
     this.deps.viewer.requestRender();
   }
@@ -202,6 +205,8 @@ export class AutoPickController {
   /** The gripper was moved in the viewer (Step Jogging): show the move and that it needs a new plan. */
   public gripperMoved() {
     this.jogPressed = true;
+    this.jogGhost = true; // show where the jogged gripper is; Plan to Points brings the arm there
+    this.deps.getGraspController()?.setVisible(true);
     if (!this.busy) this.refresh();
   }
 
@@ -418,6 +423,9 @@ export class AutoPickController {
           : '';
         this.setStatus(message + tipped, 'ok');
         await this.showSelected();
+        this.jogGhost = false;
+        this.deps.getGraspController()?.setVisible(false);
+        this.runInMujoco('approach'); // the arm's gripper drives to the marked point and stays there
       });
     } catch (err: any) {
       this.fail(`Could not start the planner: ${err?.message || err}. Is the cell server running (python -m server)?`);
@@ -491,16 +499,16 @@ export class AutoPickController {
     return true;
   }
 
-  private async runInMujoco(mode: 'preview' | 'execute') {
+  private async runInMujoco(mode: 'preview' | 'approach' | 'execute') {
     const plan = this.doc?.plans[this.selected];
     if (!this.runId || !plan || this.planIsStale()) return;
     this.busy = true;
-    this.setStatus(mode === 'preview' ? 'Opening the MuJoCo preview...' : 'Starting the simulation...');
+    this.setStatus(mode === 'execute' ? 'Starting the simulation...' : 'The arm goes to the pick point...');
     try {
       const key = this.simKey();
       const runId = await startRun(this.runId, this.selected, mode);
       this.processRunning = true;
-      this.live.start(runId, mode === 'preview' ? 'Preview: planned motion, no physics' : 'Sim: MuJoCo physics');
+      this.live.start(runId, mode === 'execute' ? 'Sim: MuJoCo physics' : 'Arm at the pick point');
       this.watch(
         runId,
         (ok, message, st) => {
