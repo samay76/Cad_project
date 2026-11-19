@@ -103,6 +103,8 @@ export class LiveView {
   private overlay: HTMLDivElement;
   private session = 0;
   private framed = false; // camera fitted to the robot once per live view
+  /** none: nothing; cell: the empty cell around the part while teaching (EC66 at home); live: a running job */
+  private mode: 'none' | 'cell' | 'live' = 'none';
 
   constructor(
     private viewer: Viewer,
@@ -126,9 +128,31 @@ export class LiveView {
     return this.runId !== null;
   }
 
+  /** Teaching: the cell (table, tray, room, EC66 at home) around the part, so points are marked in the workspace.
+   * The part stays where the web app shows it (seated on the fixture, as in the simulation). */
+  public async showCell() {
+    if (this.mode !== 'none') return;
+    this.clearScene();
+    this.mode = 'cell';
+    const session = ++this.session;
+    try {
+      const r = await fetch('/api/cell/scene', { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await this.build((await r.json()) as ViewScene, session, true);
+    } catch (err) {
+      console.warn('Cell view:', err);
+      if (session === this.session) {
+        this.mode = 'none';
+        this.viewer.setLiveLook(false);
+      }
+    }
+  }
+
   /** Shows the live cell of a job that was just started in run `runId`. */
   public start(runId: string, title: string) {
-    this.close();
+    if (this.runId !== null) this.viewer.stopAnimation();
+    this.clearScene();
+    this.mode = 'live';
     const session = ++this.session;
     this.runId = runId;
     this.ended = false;
@@ -169,14 +193,24 @@ export class LiveView {
     el.className = `live-view-msg ${kind === 'info' ? '' : `is-${kind}`}`;
   }
 
-  /** Back to teaching: removes the live cell and shows the part, fixture and gripper again. */
+  /** Back to teaching after a run: the part, fixture and gripper again, in the cell. (Teaching: nothing to do.) */
   public close() {
-    if (!this.active && !this.root.children.length) return;
+    if (this.mode !== 'live') return;
+    if (this.runId !== null) this.viewer.stopAnimation();
+    this.clearScene();
+    this.mode = 'none';
+    this.overlay.classList.remove('visible', 'is-live');
+    this.hideTeaching(false);
+    this.viewer.requestRender();
+    if (this.viewer.getModelRoot()) this.showCell();
+  }
+
+  /** Removes whatever cell is drawn (meshes, room, lights) and stops its updates. */
+  private clearScene() {
     this.session++;
     if (this.pollTimer !== null) window.clearTimeout(this.pollTimer);
     if (this.raf !== null) cancelAnimationFrame(this.raf);
     this.pollTimer = this.raf = null;
-    if (this.runId !== null) this.viewer.stopAnimation();
     this.runId = null;
     this.scene = null;
     this.frames = [];
@@ -196,13 +230,9 @@ export class LiveView {
     this.bodies = [];
     for (const o of this.roomLights) this.viewer.getScene().remove(o);
     this.roomLights = [];
-    this.viewer.setLiveLook(false);
-    this.overlay.classList.remove('visible', 'is-live');
-    this.hideTeaching(false);
-    this.viewer.requestRender();
   }
 
-  private async build(scene: ViewScene, session: number) {
+  private async build(scene: ViewScene, session: number, cell = false) {
     this.bodies = scene.bodies.map(() => {
       const g = new THREE.Group();
       this.root.add(g);
@@ -227,10 +257,23 @@ export class LiveView {
     }
     if (session !== this.session) return;
     this.scene = scene;
-    this.placeRoot();
+    this.placeRoot(cell);
     this.addRoom(scene);
     this.viewer.setLiveLook(true);
     this.root.visible = true;
+    if (cell) {
+      // one frame: the arm at home
+      const r = await fetch('/api/cell/frames', { cache: 'no-store' });
+      if (session !== this.session || !r.ok) return;
+      const f = new Float32Array(await r.arrayBuffer());
+      this.bodies.forEach((body, k) => {
+        const o = 1 + 7 * k;
+        body.position.set(f[o], f[o + 1], f[o + 2]);
+        body.quaternion.set(f[o + 4], f[o + 5], f[o + 6], f[o + 3]);
+      });
+      this.viewer.requestRender();
+      return;
+    }
     this.lastWall = performance.now();
     this.poll();
     this.raf = requestAnimationFrame(this.tick);
@@ -269,14 +312,15 @@ export class LiveView {
     this.roomLights = [hemi, sun, target];
   }
 
-  /** Sim world (m) -> the 3D view: part frame (T_view), mm, then wherever the part sits in the view. */
-  private placeRoot() {
+  /** Sim world (m) -> the 3D view: part frame (T_view), mm, then wherever the part sits in the view. The teaching
+   * cell is fixed in the view (the part turned in Part Pose turns on the fixture, as it will in the simulation). */
+  private placeRoot(cell = false) {
     const T = new THREE.Matrix4();
     const t = this.scene!.T_view;
     T.set(t[0][0], t[0][1], t[0][2], t[0][3], t[1][0], t[1][1], t[1][2], t[1][3],
       t[2][0], t[2][1], t[2][2], t[2][3], 0, 0, 0, 1);
     const S = new THREE.Matrix4().makeScale(1000, 1000, 1000);
-    const part = this.viewer.getModelRoot();
+    const part = cell ? null : this.viewer.getModelRoot();
     part?.updateMatrixWorld(true);
     this.root.matrix.copy(part ? part.matrixWorld : new THREE.Matrix4()).multiply(S).multiply(T);
     this.root.matrixWorldNeedsUpdate = true;

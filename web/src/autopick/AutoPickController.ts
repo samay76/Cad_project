@@ -120,6 +120,11 @@ export class AutoPickController {
     this.refresh();
   }
 
+  /** Teaching in the workspace: the cell (table, EC66 at home, room) around the loaded part. */
+  public showCell() {
+    this.live.showCell();
+  }
+
   /** While the live cell is shown: the teaching part, fixture, gripper and plan drawing are hidden. */
   private hideTeaching(hide: boolean) {
     const root = this.deps.viewer.getModelRoot();

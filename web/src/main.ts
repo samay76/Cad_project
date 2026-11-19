@@ -67,6 +67,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (graspController) {
       graspController.setCadPartsRoot(modelRoot);
     }
+    autoPick?.showCell(); // the part is loaded into the workspace: table, EC66 at home, room
   };
 
   // Helper to restore grasp (places gripper at T_world_part * T_part_grasp)

@@ -14,6 +14,7 @@ The API is the one the web app calls (web/src/autopick/api.ts); each job runs as
   GET  /api/mujoco/view/scene?id=<runId>          the running job's cell (web_view.py), 404 until it is ready
   GET  /api/mujoco/view/frames?id=<runId>&from=N  live body poses from frame N on (float32 frames)
   GET  /api/mujoco/view/mesh/<hash>               one mesh of the cell (cached by the browser)
+  GET  /api/cell/scene, /api/cell/frames           the cell without a part (EC66 at home), for the teaching view
   GET  /api/health             server, config and job state
 
 Everything else serves web/dist (npm run build). Nothing outside web/dist and the run folders is served.
@@ -286,6 +287,28 @@ def create_app(settings=None):
             raise HTTPException(404, 'Unknown mesh.')
         return FileResponse(path, media_type='application/octet-stream',
                             headers={'Cache-Control': 'public, max-age=31536000, immutable'})
+
+    cell_dir = {'path': None}
+
+    def cell_file(name):
+        # python -m cell.cell_scene builds (or finds, cached per config) the empty cell and prints its folder
+        import subprocess
+        env = dict(os.environ, PYTHONPATH=REPO, CELL_CONFIG=s.config_file, CELL_DATA_DIR=s.data_dir)
+        r = subprocess.run([s.python, '-m', 'cell.cell_scene'], cwd=REPO, env=env, capture_output=True, text=True,
+                           timeout=300)
+        if r.returncode != 0:
+            raise HTTPException(500, 'Could not build the cell: ' + (r.stderr.strip().splitlines() or ['?'])[-1])
+        cell_dir['path'] = r.stdout.strip().splitlines()[-1]
+        return os.path.join(cell_dir['path'], name)
+
+    @app.get('/api/cell/scene')
+    def cell_scene():
+        return FileResponse(cell_file('scene.json'), media_type='application/json', headers={'Cache-Control': 'no-store'})
+
+    @app.get('/api/cell/frames')
+    def cell_frames():
+        path = os.path.join(cell_dir['path'], 'frames.bin') if cell_dir['path'] else cell_file('frames.bin')
+        return FileResponse(path, media_type='application/octet-stream', headers={'Cache-Control': 'no-store'})
 
     @app.api_route('/api/{rest:path}', methods=['GET', 'POST', 'PUT', 'DELETE'])
     def api_unknown(rest: str):
