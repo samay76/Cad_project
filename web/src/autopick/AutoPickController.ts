@@ -360,6 +360,18 @@ export class AutoPickController {
       // The gripper pose set in the view is planned exactly (position and orientation, part frame), and kept for
       // the next plans of these points. Further jogs are measured from here (also if this plan fails).
       const rp = state.relativePose;
+      // The marked points move with the gripper: the same spots on the finger pads, now on the part where the
+      // jogged gripper really closes. The panel, the markers and the plan then show the new pick location.
+      if (this.shownGraspPos && this.shownGraspQuat) {
+        const before = new THREE.Matrix4().compose(this.shownGraspPos, this.shownGraspQuat, new THREE.Vector3(1, 1, 1));
+        const after = new THREE.Matrix4().compose(
+          new THREE.Vector3(rp.position.x, rp.position.y, rp.position.z),
+          new THREE.Quaternion(rp.orientation.x, rp.orientation.y, rp.orientation.z, rp.orientation.w),
+          new THREE.Vector3(1, 1, 1)
+        );
+        this.points = this.movePointsWithGripper(after.multiply(before.invert()), root);
+        this.preview.setPoints(this.points, root, this.gripCue());
+      }
       this.taughtPose = {
         position: { ...rp.position },
         orientation: { ...rp.orientation }
@@ -419,6 +431,29 @@ export class AutoPickController {
     this.selected = index;
     this.refresh();
     await this.showSelected();
+  }
+
+  /** Moves the marked points by the gripper's jog `M` (part frame, mm) and puts each back on the part's surface:
+   * along its new normal, the nearest surface within 15 mm (else the moved point as it is). */
+  private movePointsWithGripper(M: THREE.Matrix4, root: THREE.Object3D): MarkedPoint[] {
+    const rot = new THREE.Matrix3().setFromMatrix4(M);
+    const toWorld = root.matrixWorld;
+    const toPart = toWorld.clone().invert();
+    const caster = new THREE.Raycaster();
+    return this.points.map((m) => {
+      const p = new THREE.Vector3(m.point.x, m.point.y, m.point.z).applyMatrix4(M);
+      const n = new THREE.Vector3(m.normal.x, m.normal.y, m.normal.z).applyMatrix3(rot).normalize();
+      const pw = p.clone().applyMatrix4(toWorld);
+      const nw = n.clone().transformDirection(toWorld);
+      caster.set(pw.clone().addScaledVector(nw, 15), nw.clone().negate());
+      caster.far = 30;
+      const hit = caster.intersectObject(root, true).find((h) => (h.object as THREE.Mesh).isMesh && h.face);
+      if (!hit) return { point: { x: p.x, y: p.y, z: p.z }, normal: { x: n.x, y: n.y, z: n.z } };
+      const q = hit.point.clone().applyMatrix4(toPart);
+      const fn = hit.face!.normal.clone().transformDirection(hit.object.matrixWorld).transformDirection(toPart);
+      if (fn.dot(n) < 0) fn.negate();
+      return { point: { x: q.x, y: q.y, z: q.z }, normal: { x: fn.x, y: fn.y, z: fn.z } };
+    });
   }
 
   private async showSelected() {
