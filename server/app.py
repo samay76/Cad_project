@@ -291,7 +291,12 @@ def create_app(settings=None):
     cell_dir = {'path': None}
 
     def cell_file(name):
-        # python -m cell.cell_scene builds (or finds, cached per config) the empty cell and prints its folder
+        # python -m cell.cell_scene builds (or finds, cached per config) the empty cell and prints its folder; the
+        # answer is kept while the config file is unchanged, so a page load does not start Python
+        st = os.stat(s.config_file)
+        key = (st.st_mtime_ns, st.st_size)
+        if cell_dir['path'] and cell_dir.get('key') == key and os.path.exists(os.path.join(cell_dir['path'], name)):
+            return os.path.join(cell_dir['path'], name)
         import subprocess
         env = dict(os.environ, PYTHONPATH=REPO, CELL_CONFIG=s.config_file, CELL_DATA_DIR=s.data_dir)
         r = subprocess.run([s.python, '-m', 'cell.cell_scene'], cwd=REPO, env=env, capture_output=True, text=True,
@@ -299,7 +304,17 @@ def create_app(settings=None):
         if r.returncode != 0:
             raise HTTPException(500, 'Could not build the cell: ' + (r.stderr.strip().splitlines() or ['?'])[-1])
         cell_dir['path'] = r.stdout.strip().splitlines()[-1]
+        cell_dir['key'] = key
         return os.path.join(cell_dir['path'], name)
+
+    def warm_cell():
+        try:
+            cell_file('scene.json')
+        except Exception as e:  # noqa: BLE001 - the page builds it on demand then
+            print(f'[server] could not prepare the workspace: {e}', flush=True)
+
+    import threading
+    threading.Thread(target=warm_cell, daemon=True).start()   # ready before the first page load
 
     @app.get('/api/cell/scene')
     def cell_scene():

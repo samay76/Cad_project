@@ -1787,3 +1787,41 @@ html, body{
 .live-view-msg {
   display: none;
 }
+
+/* 'Loading...' note while the next 3D scene loads (autopick/LiveView.ts) */
+.live-view-loader {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #e2e8f0;
+  font-size: 12px;
+  z-index: 21;
+  pointer-events: none;
+}
+
+.live-view-loader.visible {
+  display: flex;
+}
+
+.live-view-loader::before {
+  content: '';
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(226, 232, 240, 0.35);
+  border-top-color: #e2e8f0;
+  animation: live-spin 0.8s linear infinite;
+}
+
+@keyframes live-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

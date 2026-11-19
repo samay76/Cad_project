@@ -59,7 +59,7 @@ try {
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(base);
   const shotsEarly = process.env.SMOKE_SHOTS;
-  await waitFor(() => page.evaluate(() => (window.__viewer?.getScene().getObjectByName('live_cell')?.children.length ?? 0) > 10), 180000, 'workspace at start');
+  await waitFor(() => page.evaluate(() => (() => { let n = 0; window.__viewer?.getScene().getObjectByName('live_cell')?.traverse((o) => { if (o.isMesh) n++; }); return n; })() > 10), 180000, 'workspace at start');
   await page.waitForTimeout(1500);
   if (shotsEarly) await page.screenshot({ path: path.join(shotsEarly, 'app_start.png') });
   console.log('ok: the app opens in the workspace');
@@ -129,14 +129,14 @@ try {
     await page.click(button);
     await waitFor(() => page.isVisible('.live-view-overlay.visible'), 10000, `${what}: live view shown`);
     await waitFor(
-      () => page.evaluate(() => (window.__viewer.getScene().getObjectByName('live_cell')?.children.length ?? 0) > 10),
+      () => page.evaluate(() => (() => { let n = 0; window.__viewer.getScene().getObjectByName('live_cell')?.traverse((o) => { if (o.isMesh) n++; }); return n; })() > 10),
       120000,
       `${what}: live cell built`
     );
     const pose = () =>
       page.evaluate(() => {
         const cell = window.__viewer.getScene().getObjectByName('live_cell');
-        return cell.children.filter((c) => c.type === 'Group').map((g) => g.position.toArray().map((v) => v.toFixed(4)).join()).join('|');
+        const groups = []; cell.traverse((c) => { if (c.type === 'Group' && c !== cell && c.name !== 'cell_room') groups.push(c); }); return groups.map((g) => g.position.toArray().map((v) => v.toFixed(4)).join()).join('|');
       });
     // Sim first settles the part and holds still for the preview (a few seconds): wait for the arm to move
     const p0 = await pose();
