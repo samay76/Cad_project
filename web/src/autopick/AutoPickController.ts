@@ -37,6 +37,7 @@ export interface AutoPickDeps {
   getRobotId: () => string;
   restoreGrasp: (grasp: SavedGrasp) => Promise<void>;
   showError: (message: string, title: string) => void;
+  log?: (text: string, kind: 'info' | 'ok' | 'error') => void; // the log window
 }
 
 const POLL_MS = 500;
@@ -108,9 +109,6 @@ export class AutoPickController {
     panel.setEvents({
       onCalculate: () => this.calculate(),
       onClearPoints: () => this.clearPoints(),
-      onSelectGrasp: (i) => this.selectGrasp(i),
-      onPreviewHere: () => this.togglePreviewHere(),
-      onPreviewRobot: () => this.runInMujoco('preview'),
       onExecute: () => this.runInMujoco('execute'),
       onRealRun: () => this.runOnRealRobot(),
       onGoHome: () => this.goHome(),
@@ -314,6 +312,7 @@ export class AutoPickController {
 
   private setStatus(text: string, kind: 'info' | 'ok' | 'error' = 'info') {
     this.status = { text, kind };
+    this.deps.log?.(text, kind); // the log window (right, bottom)
     this.refresh();
   }
 
@@ -426,13 +425,6 @@ export class AutoPickController {
     this.deps.showError(message, 'Auto Pick & Place');
   }
 
-  // ---------------- show & preview ----------------
-  private async selectGrasp(index: number) {
-    this.selected = index;
-    this.refresh();
-    await this.showSelected();
-  }
-
   /** Moves the marked points by the gripper's jog `M` (part frame, mm) and puts each back on the part's surface:
    * along its new normal, the nearest surface within 15 mm (else the moved point as it is). */
   private movePointsWithGripper(M: THREE.Matrix4, root: THREE.Object3D): MarkedPoint[] {
@@ -492,27 +484,6 @@ export class AutoPickController {
     if (THREE.MathUtils.radToDeg(quat.angleTo(this.plannedQuaternion)) <= ORIENTATION_TOLERANCE_DEG) return false;
     this.setStatus('The part was rotated after planning. Press Calculate Grasp again.', 'error');
     return true;
-  }
-
-  private togglePreviewHere() {
-    this.live.close();
-    if (this.preview.playing) {
-      this.preview.stop();
-      this.refresh();
-      return;
-    }
-    const grasp = this.deps.getGraspController();
-    const root = this.partRoot();
-    const plan = this.doc?.plans[this.selected];
-    if (!grasp || !root || !plan || this.planIsStale()) return;
-    this.preview.play(
-      plan,
-      grasp,
-      root,
-      (label) => this.setStatus(`Preview: ${label}...`),
-      () => this.setStatus('Preview finished. Press Execute Pick & Place to run it with physics.', 'ok')
-    );
-    this.refresh();
   }
 
   private async runInMujoco(mode: 'preview' | 'execute') {

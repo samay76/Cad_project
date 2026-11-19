@@ -104,11 +104,11 @@ try {
   // Plan
   await page.click('#auto-pick-calculate');
   await waitFor(
-    async () => (await page.getAttribute('#auto-pick-status', 'class'))?.match(/is-ok|is-error/),
+    async () => (await page.getAttribute('#cell-log .log-entry:last-child', 'class'))?.match(/is-ok|is-error/),
     180000,
     'plan finished'
   );
-  const status = await page.textContent('#auto-pick-status');
+  const status = await page.textContent('#cell-log .log-entry:last-child');
   if (!/motion\(s\) planned/i.test(status)) fail(`planning: ${status}`);
   else console.log(`ok: ${status.trim().slice(0, 140)}`);
 
@@ -138,14 +138,14 @@ try {
     await page.waitForTimeout(3000);
     if (shots) await page.screenshot({ path: path.join(shots, `${what}_live.png`) });
     await waitFor(
-      async () => (await page.getAttribute('#auto-pick-status', 'class'))?.match(/is-ok|is-error/) &&
+      async () => (await page.getAttribute('#cell-log .log-entry:last-child', 'class'))?.match(/is-ok|is-error/) &&
         !(await page.isVisible('.live-view-overlay.is-live')),
       300000,
       `${what} finished`
     );
     if (shots) await page.screenshot({ path: path.join(shots, `${what}_end.png`) });
-    console.log(`ok (${what}): ${(await page.textContent('#auto-pick-status')).trim().slice(0, 160)}`);
-    if (!/is-ok/.test(await page.getAttribute('#auto-pick-status', 'class'))) fail(`${what} did not succeed`);
+    console.log(`ok (${what}): ${(await page.textContent('#cell-log .log-entry:last-child')).trim().slice(0, 160)}`);
+    if (!/is-ok/.test(await page.getAttribute('#cell-log .log-entry:last-child', 'class'))) fail(`${what} did not succeed`);
   };
   if (process.env.SMOKE_SIM || process.env.SMOKE_REAL) await liveRun('#auto-pick-execute', 'sim');
   if (process.env.SMOKE_REAL) {
@@ -161,7 +161,7 @@ try {
   fail(e.message);
   console.error(serverLog.split('\n').filter((l) => !l.includes('GET /api/mujoco/status')).slice(-15).join('\n'));
   try {
-    console.error('panel status:', await browser?.contexts()[0]?.pages()[0]?.textContent('#auto-pick-status'));
+    console.error('panel status:', await browser?.contexts()[0]?.pages()[0]?.textContent('#cell-log .log-entry:last-child'));
   } catch {
     // no page
   }

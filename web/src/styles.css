@@ -1717,3 +1717,76 @@ html, body{
   flex: 1;
   white-space: nowrap;
 }
+
+/* Log window: bottom of the right sidebar (ui/LogPanel.ts) */
+.log-mount {
+  flex: 0 0 46%;
+  min-height: 160px;
+  display: flex;
+}
+
+.log-mount > .log-block {
+  flex: 1;
+  min-height: 0;
+}
+
+.log-block .block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.log-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 10px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.log-entry {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  padding: 5px 8px;
+  border-left: 3px solid #94a3b8;
+  background: #f8fafc;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+
+.log-entry.is-ok {
+  border-left-color: #22c55e;
+  background: #f0fdf4;
+}
+
+.log-entry.is-error {
+  border-left-color: #ef4444;
+  background: #fef2f2;
+}
+
+.log-time {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The one simulation button: big */
+.auto-pick-sim {
+  flex: 1;
+  grid-column: 1 / -1; /* the whole row */
+  width: 100%;
+  font-size: 15px;
+  font-weight: 700;
+  padding: 12px 0;
+  letter-spacing: 0.02em;
+}
+
+/* The live overlay shows only what is running; the messages are in the log window */
+.live-view-msg {
+  display: none;
+}

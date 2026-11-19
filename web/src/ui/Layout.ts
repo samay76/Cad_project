@@ -19,6 +19,7 @@ export class AppLayout {
   public gripperPanelContainer!: HTMLElement;
   public partPanelContainer!: HTMLElement;
   public propertiesPanelContainer!: HTMLElement;
+  public logContainer!: HTMLElement;
 
   private fileInput!: HTMLInputElement;
   private fileNameDisplay!: HTMLElement;
@@ -197,6 +198,7 @@ export class AppLayout {
             <div class="right-tab-content" id="tab-cad-content">
               <div id="properties-panel-mount"></div>
             </div>
+            <div id="log-mount" class="log-mount"></div>
           </aside>
         </main>
 
@@ -219,6 +221,7 @@ export class AppLayout {
     this.gripperPanelContainer = this.root.querySelector('#gripper-panel-mount')!;
     this.partPanelContainer = this.root.querySelector('#part-panel-mount')!;
     this.propertiesPanelContainer = this.root.querySelector('#properties-panel-mount')!;
+    this.logContainer = this.root.querySelector('#log-mount')!;
 
     this.fileInput = this.root.querySelector('#cad-file-input')!;
     this.fileNameDisplay = this.root.querySelector('#loaded-file-text')!;

@@ -7,9 +7,6 @@
 export interface AutoPickPanelEvents {
   onCalculate: () => void;
   onClearPoints: () => void;
-  onSelectGrasp: (index: number) => void;
-  onPreviewHere: () => void;
-  onPreviewRobot: () => void;
   onExecute: () => void;
   onRealRun: () => void;
   onGoHome: () => void;
@@ -98,24 +95,10 @@ export class AutoPickPanel {
           <button id="auto-pick-calculate" class="btn btn-primary btn-sm" ${canCalculate ? '' : 'disabled'} title="${touch ? 'Plan the motion that brings the closed fingertips to the marked point' : 'Plan the motion that puts one finger on each marked point'}">${touch ? 'Plan to Point' : 'Plan to Points'}</button>
           <button id="auto-pick-clear" class="btn btn-secondary btn-sm" ${view.points.length && !view.busy ? '' : 'disabled'} title="Remove the marked points">Clear Points</button>
         </div>
-        ${view.status ? `<div id="auto-pick-status" class="auto-pick-status ${view.status.kind === 'error' ? 'is-error' : view.status.kind === 'ok' ? 'is-ok' : ''}">${escapeHtml(view.status.text)}</div>` : ''}
         ${
           planned
-            ? `<div class="auto-pick-grasps">
-                ${view.grasps
-                  .map(
-                    (g, i) => `
-                    <button class="auto-pick-grasp ${i === view.selected ? 'is-selected' : ''}" data-index="${i}" ${view.busy || view.playing ? 'disabled' : ''}>
-                      <span class="auto-pick-grasp-title">${escapeHtml(g.title)}</span>
-                      <span class="auto-pick-grasp-detail">${escapeHtml(g.detail)}</span>
-                    </button>`
-                  )
-                  .join('')}
-              </div>
-              <div class="auto-pick-actions">
-                <button id="auto-pick-preview-here" class="btn btn-secondary btn-sm" ${view.busy ? 'disabled' : ''} title="Play the gripper and part motion in this view">${view.playing ? 'Stop Preview' : 'Preview Here'}</button>
-                <button id="auto-pick-preview-robot" class="btn btn-secondary btn-sm" ${view.busy || view.playing ? 'disabled' : ''} title="Play the planned motion with the robot arm in a MuJoCo window, no physics">Preview Robot</button>
-                <button id="auto-pick-execute" class="btn btn-primary btn-sm auto-pick-wide" ${view.busy || view.playing ? 'disabled' : ''} title="Run the pick &amp; place with full physics in MuJoCo (gripper included). Watch it to the end to enable Real Sim.">Sim</button>
+            ? `<div class="auto-pick-actions">
+                <button id="auto-pick-execute" class="btn btn-primary auto-pick-sim" ${view.busy || view.playing ? 'disabled' : ''} title="Run the motion with full physics in the simulation, shown live in the 3D view. Let it finish to enable Real Sim.">Simulation</button>
               </div>
               <div class="auto-pick-real">
                 <div class="auto-pick-real-title">REAL ROBOT (Elite EC66)</div>
@@ -141,8 +124,6 @@ export class AutoPickPanel {
       this.container.querySelector(`#${id}`)?.addEventListener('click', () => handler?.());
     on('auto-pick-calculate', this.events?.onCalculate);
     on('auto-pick-clear', this.events?.onClearPoints);
-    on('auto-pick-preview-here', this.events?.onPreviewHere);
-    on('auto-pick-preview-robot', this.events?.onPreviewRobot);
     on('auto-pick-execute', this.events?.onExecute);
     on('auto-pick-real-run', this.events?.onRealRun);
     on('auto-pick-go-home', this.events?.onGoHome);
@@ -161,9 +142,6 @@ export class AutoPickPanel {
     );
     this.container.querySelectorAll<HTMLButtonElement>('.auto-pick-mode .seg-btn').forEach((btn) => {
       btn.addEventListener('click', () => this.events?.onMode(btn.dataset.mode as 'grip' | 'touch'));
-    });
-    this.container.querySelectorAll<HTMLButtonElement>('.auto-pick-grasp').forEach((btn) => {
-      btn.addEventListener('click', () => this.events?.onSelectGrasp(Number(btn.dataset.index)));
     });
   }
 }

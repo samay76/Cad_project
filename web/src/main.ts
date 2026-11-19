@@ -5,6 +5,7 @@ import { PropertiesPanel } from './ui/PropertiesPanel';
 import { GripperPanel } from './ui/GripperPanel';
 import { PartPanel } from './ui/PartPanel';
 import { AutoPickPanel } from './ui/AutoPickPanel';
+import { LogPanel } from './ui/LogPanel';
 import { GripperLoader } from './gripper/GripperLoader';
 import { GraspController } from './gripper/GraspController';
 import { PartController } from './part/PartController';
@@ -239,6 +240,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
 
   // Automatic pick & place: two marked points -> grasp -> planned motion -> preview -> execute
+  const logPanel = new LogPanel(layout.logContainer);
   autoPick = new AutoPickController(new AutoPickPanel(layout.autoPickContainer), {
     viewer,
     getGraspController: () => graspController,
@@ -246,7 +248,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     getGripperId: () => activeGripperId,
     getRobotId: () => activeRobotId,
     restoreGrasp,
-    showError: (message, title) => layout?.showError(message, title)
+    showError: (message, title) => layout?.showError(message, title),
+    log: (text, kind) => logPanel.add(text, kind)
   });
 
   // 9. Connect Viewer events to UI
