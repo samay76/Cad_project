@@ -110,7 +110,7 @@ try {
   await page.click('#auto-pick-calculate');
   // planning, then the arm drives to the pick point by itself (approach) and stays there
   await waitFor(
-    async () => /gripper is at the pick point|error|cannot|could not/i.test((await page.textContent('#cell-log')) || '') &&
+    async () => /arm at the pick point|error|cannot|could not/i.test((await page.textContent('#cell-log')) || '') &&
       (await page.getAttribute('#cell-log .log-entry:last-child', 'class'))?.match(/is-ok|is-error/),
     240000,
     'plan + arm at the pick point'
@@ -119,8 +119,8 @@ try {
   const planned = log.match(/\d+ (touch|complete) motion\(s\) planned[^.]*/i)?.[0];
   if (!planned) fail(`planning: ${log.slice(-300)}`);
   else console.log(`ok: ${planned}`);
-  if (!/gripper is at the pick point/i.test(log)) fail('the arm did not go to the pick point');
-  else console.log('ok: the arm drove to the pick point after planning');
+  if (!/The arm at the pick point/i.test(log)) fail('the arm did not go to the pick point');
+  else console.log('ok: the arm is at the pick point after planning (fingers closed)');
   if (shotsEarly) await page.screenshot({ path: path.join(shotsEarly, 'teach_arm_at_point.png') });
 
   const shots = process.env.SMOKE_SHOTS;

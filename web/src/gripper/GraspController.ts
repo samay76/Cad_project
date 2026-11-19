@@ -238,6 +238,7 @@ export class GraspController {
 
   /** Shows or hides the gripper and its gizmo (hidden while the live cell is shown). */
   public setVisible(visible: boolean) {
+    this.gripperModel.setGhost(true); // only ever shown as the jog preview: light and see-through
     this.gripperModel.root.visible = visible;
     this.setTransformVisible(visible);
   }

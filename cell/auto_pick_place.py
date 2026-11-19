@@ -881,6 +881,29 @@ class AutoPickPlace(CadPickPlace):
             pts += [site_T_of(self.model, self.scratch, qs[i])[:3, 3] for i in range(0, len(qs), step)]
         return pts
 
+    def show_pick_pose(self, doc, plan):
+        """The arm straight at the pick pose (no motion), the fingers closed as they will hold the part: what the web
+        shows right after planning."""
+        m, d = self.model, self.data
+        self._set_part_qpos(np.array(doc['part']['T_world_part']))
+        q = np.array(next(p for p in plan['phases'] if p['name'] == 'approach')['q'][-1])
+        if plan.get('touch'):
+            width, how = 0.0, 'the closed fingertips at the point'
+        elif plan['mode'] == 'outside':
+            width, how = float(plan['widthMm']), f"the fingers closed on the part ({plan['widthMm']:.1f} mm)"
+        else:
+            width = next(p['width'] for p in plan['phases'] if p['name'] in ('lift', 'hold'))
+            how = f'the fingers opened against the bore ({width:.1f} mm)'
+        d.qpos[:N_ARM] = q
+        self.fingers.set_qpos(d.qpos, width)
+        d.qvel[:] = 0
+        mujoco.mj_forward(m, d)
+        if self.web is not None:
+            self.web.frame(d, 0.05, force=True)
+        self.snapshot('pick_pose')
+        return (f'The arm at the pick point, {how}. Check it, then press Simulation; or move the gripper with '
+                'Step Jogging and plan again.')
+
     def preview_plan(self, doc, plan, until=None, speed=None):
         """until: stop after this phase and stay there (e.g. 'approach': the gripper at the pick point)."""
         if speed:
@@ -1291,8 +1314,8 @@ def main():
             sim.overlay('AT HOME' if args.mode == 'home' else 'REAL RUN DONE', message + '  Close this window when finished.')
             sim.idle_preview()
             return 0
-        if args.mode == 'approach':   # after planning: the arm drives to the pick point and stays there
-            message = sim.preview_plan(doc, plan, until='approach', speed=2.0)
+        if args.mode == 'approach':   # after planning: the arm at the pick point, fingers closed as they will hold
+            message = sim.show_pick_pose(doc, plan)
             status.update('done', message, state='done', ok=True)
             return 0
         if args.mode == 'preview':

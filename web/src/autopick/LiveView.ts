@@ -100,6 +100,7 @@ export class LiveView {
   private pollTimer: number | null = null;
   private raf: number | null = null;
   private ended = false;
+  private endedOk = false;
   private overlay: HTMLDivElement;
   private session = 0;
   private framed = false; // camera fitted to the robot once per live view
@@ -149,13 +150,15 @@ export class LiveView {
   }
 
   /** Shows the live cell of a job that was just started in run `runId`. */
-  public start(runId: string, title: string) {
+  public start(runId: string, title: string, frameCamera = true) {
     if (this.runId !== null) this.viewer.stopAnimation();
     this.clearScene();
     this.mode = 'live';
     const session = ++this.session;
+    this.framed = !frameCamera; // the pick pose keeps your view; runs frame the workspace once
     this.runId = runId;
     this.ended = false;
+    this.endedOk = false;
     this.overlay.classList.add('visible', 'is-live');
     this.overlay.querySelector('.live-title')!.textContent = title;
     this.setMessage('Starting... (the first run of a part builds its scene)');
@@ -172,7 +175,8 @@ export class LiveView {
       } catch {
         // server busy: try again
       }
-      if (!this.ended) window.setTimeout(waitForScene, 400);
+      // keep waiting while the job runs, and after it ended well (a short job ends before its scene is loaded)
+      if (!this.ended || this.endedOk) window.setTimeout(waitForScene, 400);
     };
     waitForScene();
   }
@@ -181,10 +185,12 @@ export class LiveView {
   public finish(ok: boolean, message: string) {
     if (!this.active) return;
     this.ended = true;
+    this.endedOk = ok;
     this.setMessage(message, ok ? 'ok' : 'error');
     this.overlay.classList.remove('is-live');
     if (this.scene) this.poll(); // the last frames
-    else this.close(); // ended before the scene was built (e.g. a planning error): nothing to show
+    else if (!ok) this.close(); // failed before its scene was built: nothing to show
+    // else: the scene is still loading; build() fetches its frames
   }
 
   public setMessage(text: string, kind: 'info' | 'ok' | 'error' = 'info') {

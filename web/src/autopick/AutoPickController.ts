@@ -503,12 +503,12 @@ export class AutoPickController {
     const plan = this.doc?.plans[this.selected];
     if (!this.runId || !plan || this.planIsStale()) return;
     this.busy = true;
-    this.setStatus(mode === 'execute' ? 'Starting the simulation...' : 'The arm goes to the pick point...');
+    this.setStatus(mode === 'execute' ? 'Starting the simulation...' : 'Putting the arm at the pick point...');
     try {
       const key = this.simKey();
       const runId = await startRun(this.runId, this.selected, mode);
       this.processRunning = true;
-      this.live.start(runId, mode === 'execute' ? 'Sim: MuJoCo physics' : 'Arm at the pick point');
+      this.live.start(runId, mode === 'execute' ? 'Sim: MuJoCo physics' : 'Arm at the pick point', mode === 'execute');
       this.watch(
         runId,
         (ok, message, st) => {

@@ -366,6 +366,27 @@ export class GripperModel {
    * Toggles collision highlight on specific penetrating visual meshes.
    * Zero per-frame allocations: swaps pre-made material references.
    */
+  /** Ghost look (the jog preview): light blue and see-through, so the arm's own gripper stays the real one. */
+  public setGhost(on: boolean) {
+    const seen = new Set<THREE.Material>();
+    for (const orig of this.originalMaterials.values()) {
+      for (const m of Array.isArray(orig) ? orig : [orig]) {
+        if (seen.has(m)) continue;
+        seen.add(m);
+        const mat = m as THREE.MeshStandardMaterial;
+        if (mat.userData.ghostBase === undefined) {
+          mat.userData.ghostBase = { color: mat.color?.getHex(), opacity: mat.opacity, transparent: mat.transparent, depthWrite: mat.depthWrite };
+        }
+        const base = mat.userData.ghostBase;
+        if (mat.color && base.color !== undefined) mat.color.setHex(on ? 0x8fc4ff : base.color);
+        mat.transparent = on ? true : base.transparent;
+        mat.opacity = on ? 0.35 : base.opacity;
+        mat.depthWrite = on ? false : base.depthWrite;
+        mat.needsUpdate = true;
+      }
+    }
+  }
+
   public highlightMeshes(penetratingMeshes: THREE.Mesh[]) {
     const hasCol = penetratingMeshes.length > 0;
     this.isColliding = hasCol;
