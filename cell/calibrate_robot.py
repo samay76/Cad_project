@@ -70,9 +70,30 @@ def close_gripper(gcfg):
         g.close()
 
 
+SCALE_TOP_MM = (-28.4, -25.955, 138.4)   # centre of the top face of the upright, cad/scale.step frame
+
+
+def scale_top_world(cfg):
+    """World position (m) of the top of the scale's upright, where the sim bolts the fixture."""
+    from .paths import repo_path
+    from .pick_station import load, place, seated_pose
+    ps = cfg['pick_station']
+    info = load(repo_path(ps['file']))
+    placement = dict(place(info, ps.get('near_xy', cfg['pick_xy']), ps.get('yaw_deg', 0.0)),
+                     bottom_z_mm=info['bottom_z_mm'])
+    pos, quat = seated_pose(placement)
+    yaw = 2 * np.arctan2(quat[3], quat[0])
+    c, s = np.cos(yaw), np.sin(yaw)
+    x, y, z = (v / 1000.0 for v in SCALE_TOP_MM)
+    return np.array([pos[0] + c * x - s * y, pos[1] + s * x + c * y, pos[2] + z])
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--hole', nargs=2, type=int, default=[15, 0], help='big table hole the fingertips touch (i j)')
+    ap.add_argument('--scale-top', action='store_true',
+                    help='the fingertips touch the centre of the top of the scale\'s upright (cad/scale.step, the '
+                         'fixture) instead of a table hole: calibrates right where the touch / grip tests work')
     ap.add_argument('--ip', default='192.168.1.200')
     ap.add_argument('--src', help='local IP to connect from (found automatically if omitted)')
     ap.add_argument('--joints', nargs=6, type=float, help='joint angles in degrees instead of reading the robot')
@@ -108,12 +129,16 @@ def main():
     tip = fingertip(model, data)
     down = -data.site_xmat[model.site('g_tcp').id].reshape(3, 3)[:, 2] @ np.array([0, 0, -1.0])
 
-    i, j = args.hole
-    hole = np.array([BIG_HOLE_ORIGIN[0] + i * BIG_HOLE_PITCH, BIG_HOLE_ORIGIN[1] + j * BIG_HOLE_PITCH, 0.0])
+    if args.scale_top:
+        hole, where = scale_top_world(cfg), 'centre of the top of the scale upright'
+    else:
+        i, j = args.hole
+        hole = np.array([BIG_HOLE_ORIGIN[0] + i * BIG_HOLE_PITCH, BIG_HOLE_ORIGIN[1] + j * BIG_HOLE_PITCH, 0.0])
+        where = f'hole ({i}, {j}) centre, on the table'
     err = (hole - tip) * 1000.0
     new = offset + err
     print(f'\nCurrent robot_base_offset_mm: [{offset[0]:.1f}, {offset[1]:.1f}, {offset[2]:.1f}]   (coupling {coupling:.0f} mm)')
-    print(f'Real fingertips (hole ({i}, {j}) centre, on the table): x={hole[0] * 1000:7.1f} y={hole[1] * 1000:7.1f} z=  0.0 mm')
+    print(f'Real fingertips ({where}): x={hole[0] * 1000:7.1f} y={hole[1] * 1000:7.1f} z={hole[2] * 1000:6.1f} mm')
     print(f'Sim fingertips for these joints:                     x={tip[0] * 1000:7.1f} y={tip[1] * 1000:7.1f} z={tip[2] * 1000:5.1f} mm')
     if abs(down) < 0.97:
         print(f'  (the gripper is tilted {np.degrees(np.arccos(min(1.0, abs(down)))):.0f} deg from straight down: '
@@ -123,7 +148,7 @@ def main():
         print('Within 1.5 mm: the sim matches the real robot here. Nothing to change.')
         return 0
     print(f'Corrected robot_base_offset_mm: [{new[0]:.1f}, {new[1]:.1f}, {new[2]:.1f}]')
-    if np.linalg.norm(err[:2]) > 15 or abs(err[2]) > 30:
+    if np.linalg.norm(err[:2]) > (40 if args.scale_top else 15) or abs(err[2]) > 40:
         print('  The error is large: check that the fingertips are on the CENTRE of the right hole, the gripper is '
               'closed and points straight down. Not writing it automatically.' if args.write else
               '  The error is large: check the hole number and that the gripper is closed and points straight down.')
