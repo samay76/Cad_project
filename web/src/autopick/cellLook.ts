@@ -95,6 +95,19 @@ const wallTexture = (width: number) =>
     c.strokeRect(1.5, 1.5, s - 3, s * 0.64);
   }, [width / 1.2, 1]);
 
+/** Closed roller door: horizontal grey slats. */
+const rollerDoor = () =>
+  canvasTexture(256, (c, s) => {
+    c.fillStyle = '#9aa1a8';
+    c.fillRect(0, 0, s, s);
+    for (let y = 0; y < s; y += 16) {
+      c.fillStyle = '#7f868d';
+      c.fillRect(0, y, s, 3);
+      c.fillStyle = '#b4bac0';
+      c.fillRect(0, y + 3, s, 2);
+    }
+  }, [1, 3]);
+
 /**
  * The room around the cell. `table` = the table's box (sim world, m), `floorZ` = floor height (m).
  * Returns the room (add it to the cell group) and the lights (add them to the 3D view's scene, in its frame).
@@ -105,7 +118,7 @@ export function buildRoom(table: THREE.Box3, floorZ: number) {
   const c = table.getCenter(new THREE.Vector3());
   const size = table.getSize(new THREE.Vector3());
 
-  const floorSize = 14;
+  const floorSize = 6.0;     // the room's floor (walls 3 m from the table centre)
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(floorSize, floorSize),
     new THREE.MeshStandardMaterial({ map: concrete(floorSize / 2), roughness: 0.85, metalness: 0.0 })
@@ -131,21 +144,56 @@ export function buildRoom(table: THREE.Box3, floorZ: number) {
   strip(sy, c.x - sx / 2, c.y, Math.PI / 2);
   strip(sy, c.x + sx / 2, c.y, Math.PI / 2);
 
-  // walls behind the robot (-x) and to its left (+y), so the usual view from the front-right looks into the room
+  // four walls around the cell, one-sided (they face inwards: seen from outside they do not block the view), and a
+  // gate with a closed roller door in the wall on the -y side
+  const half = 3.0;          // m from the table centre to each wall
   const height = 3.4;
-  const wall = (len: number, x: number, y: number, rotZ: number) => {
-    const g = new THREE.Mesh(
-      new THREE.PlaneGeometry(len, height),
-      new THREE.MeshStandardMaterial({ map: wallTexture(len), roughness: 0.9, metalness: 0.0 })
-    );
-    g.rotation.x = Math.PI / 2;
-    g.rotation.y = rotZ;
-    g.position.set(x, y, floorZ + height / 2);
+  const up = new THREE.Vector3(0, 0, 1);
+  const panel = (len: number, h: number, mid: THREE.Vector3, inward: THREE.Vector3, material: THREE.Material) => {
+    const g = new THREE.Mesh(new THREE.PlaneGeometry(len, h), material);
+    const along = new THREE.Vector3().crossVectors(up, inward);
+    g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(along, up, inward));
+    g.position.copy(mid);
     g.receiveShadow = true;
     room.add(g);
+    return g;
   };
-  wall(floorSize, c.x - 3.2, c.y, Math.PI / 2);
-  wall(floorSize, c.x, c.y + 3.2, 0);
+  const wallMat = (len: number) => new THREE.MeshStandardMaterial({ map: wallTexture(len), roughness: 0.9, side: THREE.FrontSide });
+  const z0 = floorZ;
+  const sides: [THREE.Vector3, THREE.Vector3][] = [
+    [new THREE.Vector3(c.x - half, c.y, 0), new THREE.Vector3(1, 0, 0)],   // behind the robot
+    [new THREE.Vector3(c.x + half, c.y, 0), new THREE.Vector3(-1, 0, 0)],
+    [new THREE.Vector3(c.x, c.y + half, 0), new THREE.Vector3(0, -1, 0)],
+  ];
+  for (const [p, n] of sides) panel(2 * half, height, p.clone().setZ(z0 + height / 2), n, wallMat(2 * half));
+  // the gate wall (-y): wall | gate | wall, a lintel above the gate, a roller door and a yellow/black frame
+  const gateW = 1.8;
+  const gateH = 2.5;
+  const gx = c.x + 0.6;                       // gate centre along the wall
+  const wy = c.y - half;
+  const inward = new THREE.Vector3(0, 1, 0);
+  const leftLen = gx - gateW / 2 - (c.x - half);
+  const rightLen = c.x + half - (gx + gateW / 2);
+  panel(leftLen, height, new THREE.Vector3(c.x - half + leftLen / 2, wy, z0 + height / 2), inward, wallMat(leftLen));
+  panel(rightLen, height, new THREE.Vector3(c.x + half - rightLen / 2, wy, z0 + height / 2), inward, wallMat(rightLen));
+  panel(gateW, height - gateH, new THREE.Vector3(gx, wy, z0 + gateH + (height - gateH) / 2), inward,
+        new THREE.MeshStandardMaterial({ color: 0xcfd3d8, roughness: 0.9, side: THREE.FrontSide }));
+  panel(gateW, gateH, new THREE.Vector3(gx, wy - 0.06, z0 + gateH / 2), inward,
+        new THREE.MeshStandardMaterial({ map: rollerDoor(), roughness: 0.55, metalness: 0.5, side: THREE.FrontSide }));
+  const post = (x: number) => {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, gateH + 0.12), new THREE.MeshStandardMaterial({ map: hazard(0.5), roughness: 0.6 }));
+    b.position.set(x, wy + 0.04, z0 + (gateH + 0.12) / 2);
+    room.add(b);
+  };
+  post(gx - gateW / 2 - 0.06);
+  post(gx + gateW / 2 + 0.06);
+  const lintel = new THREE.Mesh(new THREE.BoxGeometry(gateW + 0.24, 0.12, 0.12), new THREE.MeshStandardMaterial({ map: hazard(gateW), roughness: 0.6 }));
+  lintel.position.set(gx, wy + 0.04, z0 + gateH + 0.06);
+  room.add(lintel);
+  // a hatched floor area in front of the gate (keep clear)
+  const keepClear = new THREE.Mesh(new THREE.PlaneGeometry(gateW, 1.0), new THREE.MeshStandardMaterial({ map: hazard(gateW), roughness: 0.7, transparent: true, opacity: 0.35 }));
+  keepClear.position.set(gx, wy + 0.5, z0 + 0.002);
+  room.add(keepClear);
 
   // light: a soft sky / ground fill and a ceiling light that casts shadows onto the table and the floor
   const hemi = new THREE.HemisphereLight(0xf5f7fb, 0x55595e, 1.1);

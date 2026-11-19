@@ -104,10 +104,6 @@ export class AppLayout {
               <span class="gripper-text">Robotiq 2F-85 Active</span>
             </div>
 
-            <div class="status-indicator" id="app-status">
-              <span class="status-dot"></span>
-              <span class="status-text">Z-Up Frame (mm)</span>
-            </div>
           </div>
         </header>
 

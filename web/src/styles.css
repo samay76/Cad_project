@@ -1528,15 +1528,16 @@ html, body{
 
 .auto-pick-real-fields{
   display: grid;
-  grid-template-columns: 1.4fr 1.2fr 0.8fr;
-  gap: 4px;
+  grid-template-columns: 1.5fr 1.1fr 0.8fr;
+  gap: 6px;
 }
 
 .auto-pick-real-fields label{
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  font-size: 10px;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--text-secondary);
   min-width: 0;
 }
@@ -1544,8 +1545,9 @@ html, body{
 .auto-pick-real-fields input{
   width: 100%;
   min-width: 0;
-  padding: 3px 5px;
-  font-size: 11px;
+  height: 30px;
+  padding: 4px 8px;
+  font-size: 13px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   background: var(--bg-card);
@@ -1560,9 +1562,15 @@ html, body{
   color: var(--text-secondary);
 }
 
-.auto-pick-actions .auto-pick-stop:not(:disabled){
+.auto-pick-actions .auto-pick-stop{
   background: #dc2626;
   border-color: #dc2626;
+  color: #fff;
+}
+
+.auto-pick-actions .auto-pick-stop:disabled{
+  background: #f3a8a8;
+  border-color: #f3a8a8;
   color: #fff;
 }
 
@@ -1646,7 +1654,7 @@ html, body{
 .live-view-overlay {
   position: absolute;
   left: 12px;
-  top: 84px; /* under the performance readout, clear of the cell */
+  top: 12px; /* the top-left corner of the 3D view */
   max-width: 460px;
   display: none;
   flex-direction: column;
@@ -1773,17 +1781,6 @@ html, body{
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-/* The one simulation button: big */
-.auto-pick-sim {
-  flex: 1;
-  grid-column: 1 / -1; /* the whole row */
-  width: 100%;
-  font-size: 15px;
-  font-weight: 700;
-  padding: 12px 0;
-  letter-spacing: 0.02em;
 }
 
 /* The live overlay shows only what is running; the messages are in the log window */

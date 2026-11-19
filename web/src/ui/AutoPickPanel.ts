@@ -98,7 +98,7 @@ export class AutoPickPanel {
         ${
           planned
             ? `<div class="auto-pick-actions">
-                <button id="auto-pick-execute" class="btn btn-primary auto-pick-sim" ${view.busy || view.playing ? 'disabled' : ''} title="Run the motion with full physics in the simulation, shown live in the 3D view. Let it finish to enable Real Sim.">Simulation</button>
+                <button id="auto-pick-execute" class="btn btn-primary btn-sm auto-pick-sim" ${view.busy || view.playing ? 'disabled' : ''} title="Run the motion with full physics in the simulation, shown live in the 3D view. Let it finish to enable Real Sim.">Simulation</button>
               </div>
               <div class="auto-pick-real">
                 <div class="auto-pick-real-title">REAL ROBOT (Elite EC66)</div>
