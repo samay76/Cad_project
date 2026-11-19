@@ -303,8 +303,9 @@ def add_to_spec(spec, info, placement, seat_part=False):
                    size=[info['column_radius_mm'] / 1000.0, col_h / 2],
                    pos=[*world_xy(info['column_xy_mm']), plate_h + col_h / 2], friction=[1.0, 0.005, 0.0001],
                    **hidden)
-    else:
-        # No column: the fixture's own convex pieces (CoACD, as for parts), in its STEP frame
+    elif not placement.get('same_as_part'):
+        # No column: the fixture's own convex pieces (CoACD, as for parts), in its STEP frame. Not when the fixture is
+        # loaded as the part too (the scale): the part's pieces are the same shape, and the fingers may touch those.
         from .step_to_mesh import convert
         meta = convert(placement['file'])
         for i, hull in enumerate(meta['collision_hulls']):
