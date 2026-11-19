@@ -470,7 +470,8 @@ class CadPickPlace:
     def start_web_view(self, run_dir, T_view, label=''):
         """Streams this scene to the web app from now on (web_view.py)."""
         from .web_view import WebView
-        self.web = WebView(self.model, self.data, run_dir, T_view, label)
+        look = {k: v for k, v in (self.cfg.get('web_view') or {}).items() if k.endswith('_color')}
+        self.web = WebView(self.model, self.data, run_dir, T_view, label, look=look)
 
     def move(self, q_waypoints, seconds, grip):
         """Smoothly drives the arm through joint waypoints (piecewise-linear, cosine time scaling).

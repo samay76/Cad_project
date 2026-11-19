@@ -40,7 +40,10 @@
   "web_view": {
     "_comment": "Sim, Preview Robot, Real Sim and Go Home are shown live in the web app's 3D view (the same cell as MuJoCo). mujoco_window: also open the MuJoCo window on this PC.",
     "enabled": true,
-    "mujoco_window": false
+    "mujoco_window": false,
+    "_colors_comment": "Live view colours of the part and the fixture (the scale is printed in blue).",
+    "part_color": "#1f6fe5",
+    "fixture_color": "#1f6fe5"
   },
   "touch_test": {
     "_comment": "Touch mode in the web (one marked point, e.g. a number on the scale): the closed fingertips come straight at the point along its surface normal, stop standoff_mm before it, hold hold_s, back out and go home.",

@@ -9,7 +9,7 @@ export class PerformanceHUD {
   private container: HTMLElement;
   private fpsElement: HTMLElement | null = null;
   private colElement: HTMLElement | null = null;
-  private isVisible = true;
+  private isVisible = false; // [P] shows it
 
   // Frame timing
   private lastFrameTime = performance.now();
@@ -38,6 +38,7 @@ export class PerformanceHUD {
     `;
 
     parent.appendChild(this.container);
+    this.container.style.display = 'none';
     this.fpsElement = this.container.querySelector('#perf-fps');
     this.colElement = this.container.querySelector('#perf-col');
 

@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Viewer } from '../viewer/Viewer';
+import { buildRoom, materialFor } from './cellLook';
 
 interface SceneGeom {
   type: 'plane' | 'sphere' | 'capsule' | 'ellipsoid' | 'cylinder' | 'box' | 'mesh';
@@ -16,6 +17,9 @@ interface SceneGeom {
   rgba: number[];
   mesh?: string;
   body: number | null;
+  bodyName?: string;
+  geomName?: string;
+  material?: string;
   pos: number[];
   quat: number[]; // w x y z
 }
@@ -26,6 +30,8 @@ interface ViewScene {
   bodies: string[];
   frameFloats: number;
   T_view: number[][];
+  floorZ?: number; // floor height in the sim world (m)
+  look?: Record<string, string>; // config web_view *_color
   geoms: SceneGeom[];
 }
 
@@ -180,10 +186,17 @@ export class LiveView {
     this.root.visible = false;
     this.root.traverse((o) => {
       const mesh = o as THREE.Mesh;
-      if (mesh.isMesh) (mesh.material as THREE.Material).dispose(); // geometries are shared (cache)
+      if (!mesh.isMesh) return;
+      const m = mesh.material as THREE.MeshStandardMaterial;
+      m.map?.dispose();
+      m.dispose();
+      if (!mesh.userData.sharedGeometry) mesh.geometry.dispose(); // part / table meshes stay cached for next time
     });
     this.root.clear();
     this.bodies = [];
+    for (const o of this.roomLights) this.viewer.getScene().remove(o);
+    this.roomLights = [];
+    this.viewer.setLiveLook(false);
     this.overlay.classList.remove('visible', 'is-live');
     this.hideTeaching(false);
     this.viewer.requestRender();
@@ -198,16 +211,11 @@ export class LiveView {
     const loads = scene.geoms.map(async (g) => {
       const geom = g.type === 'mesh' && g.mesh ? await loadMesh(g.mesh) : primitive(g);
       if (!geom) return;
-      const [r, gr, b, a] = g.rgba;
-      const mat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(r, gr, b),
-        roughness: 0.55,
-        metalness: 0.15,
-        transparent: a < 1,
-        opacity: a,
-        side: THREE.DoubleSide
-      });
-      const mesh = new THREE.Mesh(geom, mat);
+      const mesh = new THREE.Mesh(geom, materialFor(g, scene.look));
+      mesh.castShadow = g.body !== null || g.geomName?.startsWith('pickstation') === true;
+      mesh.receiveShadow = true;
+      mesh.userData.geomName = g.geomName ?? '';
+      mesh.userData.sharedGeometry = g.type === 'mesh';
       mesh.raycast = () => {}; // not clickable: points are marked on the part in teaching
       setPose(mesh, [...g.pos, ...g.quat]);
       (g.body === null ? this.root : this.bodies[g.body]).add(mesh);
@@ -220,10 +228,45 @@ export class LiveView {
     if (session !== this.session) return;
     this.scene = scene;
     this.placeRoot();
+    this.addRoom(scene);
+    this.viewer.setLiveLook(true);
     this.root.visible = true;
     this.lastWall = performance.now();
     this.poll();
     this.raf = requestAnimationFrame(this.tick);
+  }
+
+  private roomLights: THREE.Object3D[] = [];
+
+  /** The industrial room around the table, and its lights (cellLook.ts). */
+  private addRoom(scene: ViewScene) {
+    const table = new THREE.Box3();
+    for (const child of this.root.children) {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh || !String(mesh.userData.geomName).startsWith('table_base')) continue;
+      mesh.updateMatrix();
+      mesh.geometry.computeBoundingBox();
+      table.union(mesh.geometry.boundingBox!.clone().applyMatrix4(mesh.matrix));
+    }
+    if (table.isEmpty()) return;
+    const { room, hemi, sun, target, center } = buildRoom(table, scene.floorZ ?? table.min.z);
+    this.root.add(room);
+    this.root.updateMatrixWorld(true);
+    // lights live in the 3D view's frame (mm): the shadow camera must not be scaled
+    const at = (dx: number, dy: number, dz: number) => this.root.localToWorld(center.clone().add(new THREE.Vector3(dx, dy, dz)));
+    target.position.copy(at(0, 0, 0));
+    sun.position.copy(at(1.4, -1.1, 2.8));
+    sun.target = target;
+    const cam = sun.shadow.camera;
+    cam.left = cam.bottom = -1400;
+    cam.right = cam.top = 1400;
+    cam.near = 10;
+    cam.far = 9000;
+    cam.updateProjectionMatrix();
+    hemi.position.set(0, 0, 1);
+    const scene3 = this.viewer.getScene();
+    for (const o of [hemi, sun, target]) scene3.add(o);
+    this.roomLights = [hemi, sun, target];
   }
 
   /** Sim world (m) -> the 3D view: part frame (T_view), mm, then wherever the part sits in the view. */

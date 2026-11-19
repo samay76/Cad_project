@@ -113,6 +113,7 @@ try {
   else console.log(`ok: ${status.trim().slice(0, 140)}`);
 
   const shots = process.env.SMOKE_SHOTS;
+  if (shots) await page.screenshot({ path: path.join(shots, 'teach_planned.png') });
   const liveRun = async (button, what) => {
     await page.click(button);
     await waitFor(() => page.isVisible('.live-view-overlay.visible'), 10000, `${what}: live view shown`);

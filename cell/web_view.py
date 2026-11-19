@@ -21,6 +21,7 @@ import mujoco
 import numpy as np
 
 from .paths import CACHE
+from .table_base import FLOOR_Z
 
 MESH_DIR = os.path.join(CACHE, 'webview')
 VISIBLE_GROUPS = (0, 1, 2)           # what the MuJoCo viewer shows by default; group 3 = collision shapes
@@ -57,7 +58,7 @@ def _mesh_blob(m, mesh_id):
 
 
 class WebView:
-    def __init__(self, model, data, run_dir, T_view, label='', fps=30.0):
+    def __init__(self, model, data, run_dir, T_view, label='', fps=30.0, look=None):
         m = self.m = model
         mujoco.mj_forward(m, data)
         self.bodies = [b for b in range(1, m.nbody) if _moves(m, b)]
@@ -71,7 +72,10 @@ class WebView:
                     or name.startswith('ghost')):        # the target ghost: the web draws its own
                 continue
             b = int(m.geom_bodyid[g])
-            entry = {'type': kind, 'size': [float(v) for v in m.geom_size[g]], 'rgba': [float(v) for v in rgba]}
+            entry = {'type': kind, 'size': [float(v) for v in m.geom_size[g]], 'rgba': [float(v) for v in rgba],
+                     # what it is, for the web's real-world colours: body, geom and material names
+                     'bodyName': m.body(b).name, 'geomName': name,
+                     'material': m.mat(m.geom_matid[g]).name if m.geom_matid[g] >= 0 else ''}
             if kind == 'mesh':
                 mid = int(m.geom_dataid[g])
                 if mid not in meshes:
@@ -90,6 +94,7 @@ class WebView:
         self._f = open(self.frames_path, 'wb')         # a new job starts a new stream
         scene = {'version': 1, 'label': label, 'bodies': [m.body(b).name for b in self.bodies],
                  'frameFloats': self.frame_floats, 'T_view': np.asarray(T_view, dtype=float).tolist(),
+                 'floorZ': FLOOR_Z, 'look': look or {},
                  'geoms': geoms}
         tmp = os.path.join(run_dir, 'scene.json.tmp')
         with open(tmp, 'w') as f:

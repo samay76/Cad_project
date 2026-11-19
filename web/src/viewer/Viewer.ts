@@ -155,6 +155,29 @@ export class Viewer {
     return this.selectionManager;
   }
 
+  private studioLights: THREE.Light[] = [];
+
+  /** Live view of the cell (LiveView): no grid, the studio lights dimmed (the room has its own), shadows on.
+   * Off: back to the clean teaching view. */
+  public setLiveLook(on: boolean) {
+    if (this.gridHelper) this.gridHelper.visible = !on;
+    for (const l of this.studioLights) l.intensity = (l.userData.base as number) * (on ? 0.35 : 1);
+    this.renderer.shadowMap.enabled = on;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.setClearColor(on ? 0xc9ced4 : 0xf5f7fa, 1.0);
+    this.renderer.toneMapping = on ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+    this.renderer.toneMappingExposure = 1.05;
+    this.scene.traverse((o) => {
+      const m = (o as THREE.Mesh).material as THREE.Material | undefined;
+      if (m) m.needsUpdate = true; // shadow / tone mapping changes need the shaders rebuilt
+    });
+    this.requestRender();
+  }
+
+  public getRenderer(): THREE.WebGLRenderer {
+    return this.renderer;
+  }
+
   private setupLighting() {
     // Ambient light for general soft illumination
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
@@ -179,6 +202,8 @@ export class Viewer {
     const headlamp = new THREE.DirectionalLight(0xffffff, 0.35);
     this.camera.add(headlamp);
     this.scene.add(this.camera);
+    this.studioLights = [ambientLight, keyLight, fillLight, bounceLight, headlamp];
+    for (const l of this.studioLights) l.userData.base = l.intensity;
   }
 
   private setupHelpers(gridSize: number) {
@@ -200,9 +225,7 @@ export class Viewer {
     this.scene.add(this.gridHelper);
 
     // XYZ Axes Helper: X=Red, Y=Green, Z=Blue
-    this.axesHelper = new THREE.AxesHelper(gridSize * 0.4);
-    this.axesHelper.renderOrder = 2;
-    this.scene.add(this.axesHelper);
+    // (no big XYZ axis lines through the part: the corner gizmo shows the axes)
   }
 
   private setupGizmo() {

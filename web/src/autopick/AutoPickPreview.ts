@@ -7,7 +7,6 @@
  */
 import * as THREE from 'three';
 import type { GraspController } from '../gripper/GraspController';
-import type { Pose } from '../types';
 import type { GraspPlan, MarkedPoint, PlanDocument } from './api';
 import type { GripCue } from './gripCue';
 
@@ -16,25 +15,6 @@ const CUE_BAD_COLOR = 0xef4444;
 const CUE_RADIUS_MM = 11; // about half a finger pad's width on both grippers
 
 export const POINT_COLORS = ['#f97316', '#a855f7'];
-
-const PHASE_COLORS: Record<string, number> = {
-  orient: 0x0ea5e9,
-  'pre-grasp': 0x3b82f6,
-  approach: 0x22c55e,
-  lift: 0xf97316,
-  inspect: 0xa855f7,
-  transfer: 0xf97316,
-  place: 0xf97316,
-  retreat: 0x22c55e,
-  home: 0x3b82f6
-};
-
-const poseMatrix = (p: Pose) =>
-  new THREE.Matrix4().compose(
-    new THREE.Vector3(p.position.x, p.position.y, p.position.z),
-    new THREE.Quaternion(p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w),
-    new THREE.Vector3(1, 1, 1)
-  );
 
 export class AutoPickPreview {
   private group = new THREE.Group();
@@ -159,36 +139,8 @@ export class AutoPickPreview {
     this.group.matrix.copy(this.frame);
     this.group.matrixWorldNeedsUpdate = true;
 
-    // Table and tray: world-frame boxes, moved into the part's starting frame.
-    const workspace = new THREE.Group();
-    workspace.matrixAutoUpdate = false;
-    workspace.matrix.copy(poseMatrix(doc.world_in_part));
-    for (const b of doc.scene.boxes) {
-      const isTable = b.name === 'table_top';
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(b.halfSize[0] * 2, b.halfSize[1] * 2, b.halfSize[2] * 2),
-        new THREE.MeshStandardMaterial({
-          color: isTable ? 0xd6c2a1 : 0x475569,
-          transparent: true,
-          opacity: isTable ? 0.35 : 0.8,
-          depthWrite: !isTable
-        })
-      );
-      mesh.position.set(b.pos[0], b.pos[1], b.pos[2]);
-      workspace.add(mesh);
-    }
-    this.group.add(workspace);
-
-    // TCP path, colored by what the arm is doing (blue free space, green near the part, orange carrying).
-    for (const phase of plan.phases) {
-      if (phase.tcp.length < 2) continue;
-      const points = phase.tcp.map((p) => new THREE.Vector3(p.position.x, p.position.y, p.position.z));
-      const line = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints(points),
-        new THREE.LineBasicMaterial({ color: PHASE_COLORS[phase.name] ?? 0x64748b })
-      );
-      this.group.add(line);
-    }
+    // The teaching view stays clean: only the part, the gripper and the marked points (no table, tray or path).
+    // Sim / Real Sim show the whole cell in the live view.
 
     // Region for the camera: the table is far larger than the motion, so frame the motion and the part.
     this.group.updateMatrixWorld(true);
