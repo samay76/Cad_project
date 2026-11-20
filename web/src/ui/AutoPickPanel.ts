@@ -98,7 +98,7 @@ export class AutoPickPanel {
         ${
           planned
             ? `<div class="auto-pick-actions">
-                <button id="auto-pick-execute" class="btn btn-primary btn-sm auto-pick-sim" ${view.busy || view.playing ? 'disabled' : ''} title="Run the motion with full physics in the simulation, shown live in the 3D view. Let it finish to enable Real Sim.">Simulation</button>
+                <button id="auto-pick-execute" class="btn btn-primary auto-pick-big auto-pick-wide auto-pick-sim" ${view.busy || view.playing ? 'disabled' : ''} title="Run the motion with full physics in the simulation, shown live in the 3D view. Let it finish to enable Real Sim.">Simulation</button>
               </div>
               <div class="auto-pick-real">
                 <div class="auto-pick-real-title">REAL ROBOT (Elite EC66)</div>
@@ -111,8 +111,8 @@ export class AutoPickPanel {
                 <div class="auto-pick-hint">${escapeHtml(view.real.hint)}</div>
                 <div class="auto-pick-actions">
                   <button id="auto-pick-go-home" class="btn btn-secondary btn-sm auto-pick-wide" ${view.real.homeEnabled && !view.busy && !view.playing ? '' : 'disabled'} title="Bring the real robot from wherever it is to this plan's home pose: arm straight up, turn, lower. Checked against the table first.">Go Home (real robot)</button>
-                  <button id="auto-pick-real-run" class="btn btn-primary btn-sm" ${view.real.enabled && !view.busy && !view.playing ? '' : 'disabled'} title="Move the real robot through the same joints as the Sim, with the MuJoCo window following it live">Real Sim</button>
-                  <button id="auto-pick-stop" class="btn btn-secondary btn-sm auto-pick-stop" ${view.real.running ? '' : 'disabled'} title="Stop the simulator; during Real Sim this sends stop to the robot. Keep a hand on the E-stop anyway.">Stop</button>
+                  <button id="auto-pick-real-run" class="btn btn-primary auto-pick-big" ${view.real.enabled && !view.busy && !view.playing ? '' : 'disabled'} title="Move the real robot through the same joints as the Sim, with the MuJoCo window following it live">Real Sim</button>
+                  <button id="auto-pick-stop" class="btn btn-secondary auto-pick-big auto-pick-stop" ${view.real.running ? '' : 'disabled'} title="Stop the simulator; during Real Sim this sends stop to the robot. Keep a hand on the E-stop anyway.">Stop</button>
                 </div>
               </div>`
             : ''

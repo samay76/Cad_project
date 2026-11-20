@@ -79,6 +79,9 @@ PHASE_LABELS = {
     'grip': 'Closing the gripper',
     'hold': 'Holding the part',
     'lift': 'Lifting the part',
+    'to-camera': 'Bringing the part to the camera',
+    'inspect': 'Turning the part in front of the camera',
+    'look': 'Camera: holding still',
     'transfer': 'Carrying the part to the target',
     'place': 'Lowering the part',
     'release': 'Opening the gripper',
@@ -487,20 +490,36 @@ class AutoPickPlace(CadPickPlace):
 
         placed = self._plan_place(T_wp, T_part_tcp, lift[-1], free_carry, hold, width_in, inside)
         col.set_part(T_wp)
+        # Camera (config inspection): from the lift to the camera, turn right and left, then on to the bin. It never
+        # rules a grasp out: if it cannot be done, the part goes straight to the bin and the plan says why.
+        inspect_phases, insp_note = self._plan_inspection(T_lift, lift[-1], hold, free_carry, T_tcp_part), None
+        transfer = placed['transfer']
+        if isinstance(inspect_phases, str):
+            inspect_phases, insp_note = [], inspect_phases
+        elif inspect_phases:
+            try:
+                transfer = planner.connect('transfer', inspect_phases[-1]['q'][-1], placed['q_above'],
+                                           free_carry(CARRY_CLEARANCE))
+            except MotionError:
+                inspect_phases, insp_note = [], 'no path from the camera to the bin'
+        col.set_part(T_wp)
 
         orient, pre_path = self._path_to_pre(q_pre, T_pre, width_in)
 
         self.T_part_tcp = T_part_tcp
-        transfer = placed['transfer']
 
         pk = self.pick
+        hold_s = float(pk.get('hold_after_grip_s', 0.0))
         phases = [
             *self._pick_phases(orient, pre_path, width_in, T_pre),
             self._phase('approach', approach, width_in, False, CARRY_SPEED,
                         minimum=self.pick_seconds(pre_mm / 1000.0, 'approach_speed_m_s', 1.5)),
             self._phase('grip', [q_grasp], width_in, False, seconds=float(pk['grip_seconds'])),
+            *([self._phase('hold', [q_grasp], hold, True, seconds=hold_s,
+                           label=f'Holding the part for {hold_s:g} s')] if hold_s > 0 else []),
             self._phase('lift', lift, hold, True, CARRY_SPEED,
                         minimum=self.pick_seconds(self.cfg['lift_height_m'], 'lift_speed_m_s', 1.5)),
+            *inspect_phases,
             self._phase('transfer', transfer, hold, True, CARRY_SPEED, minimum=2.5),
             self._phase('place', placed['down'], hold, True, CARRY_SPEED, minimum=1.5),
             self._phase('release', [placed['down'][-1]], placed['release_width'], False, seconds=1.0),
@@ -529,7 +548,61 @@ class AutoPickPlace(CadPickPlace):
             'score': round(cand.score, 2), 'terms': {k: round(v, 2) for k, v in cand.terms.items()},
             'placeYawDeg': placed['yaw'], 'T_tcp_part': T_tcp_part.tolist(), 'T_wp_placed': placed['T_wp'].tolist(),
             'durationS': round(duration, 1), 'phases': phases,
+            'inspection': {'turns': sum(p['name'] == 'inspect' for p in phases), 'skipped': insp_note},
         }
+
+    def _plan_inspection(self, T_lift, q_lift, hold, free_carry, T_tcp_part):
+        """Camera stage (config inspection) after the lift: the part goes in a straight line to look_at (its centre
+        of mass there), turns turn_deg one way about the vertical through it, holds, turns the other way, holds,
+        and turns back. Returns its phases, [] when it is off, or the reason (str) it cannot be done."""
+        insp = self.cfg.get('inspection') or {}
+        if not insp.get('enabled'):
+            return []
+        planner, check = self.planner, free_carry(0.0)
+        look = np.asarray(insp['look_at'], dtype=float)
+        com = (T_lift @ T_tcp_part @ np.append(self.meta['com_m'], 1.0))[:3]
+        T_cam = T_lift.copy()
+        T_cam[:3, 3] += look - com
+        dist = float(np.linalg.norm(look - com))
+        try:
+            to_cam = planner.line('to-camera', T_lift, T_cam, q_lift, check) if dist > 1e-3 else [q_lift]
+        except MotionError:
+            return 'the part cannot be brought to the camera'
+        turn, speed = float(insp.get('turn_deg', 60.0)), float(insp.get('turn_speed_deg_s', 20.0))
+        look_s = float(insp.get('hold_s', 1.0))
+
+        def turned(a):
+            c, s_ = np.cos(np.radians(a)), np.sin(np.radians(a))
+            R = np.eye(4)
+            R[:3, :3] = [[c, -s_, 0], [s_, c, 0], [0, 0, 1]]
+            R[:3, 3] = look - R[:3, :3] @ look   # about the vertical through look_at
+            return R @ T_cam
+
+        def turn_path(q0, a0, a1):
+            qs, q = [], q0
+            for a in np.linspace(a0, a1, max(2, int(np.ceil(abs(a1 - a0) / 3.0)) + 1))[1:]:
+                q = planner.ik(turned(a), [q])
+                if q is None or not check(q):
+                    raise MotionError(f'turn to {a:.0f} deg')
+                qs.append(q)
+            return qs
+
+        try:
+            right = turn_path(to_cam[-1], 0.0, -turn)
+            left = turn_path(right[-1], -turn, turn)
+            back = turn_path(left[-1], turn, 0.0)
+        except MotionError:
+            return f'the part cannot be turned {turn:g} deg each way at the camera'
+        mv = lambda qs, name, label, sec=None: self._phase(name, qs, hold, True, CARRY_SPEED, seconds=sec,  # noqa: E731
+                                                          minimum=1.0, label=label)
+        return [
+            mv(to_cam, 'to-camera', 'Bringing the part to the camera', None if dist > 1e-3 else 0.5),
+            mv(right, 'inspect', f'Camera: turning the part {turn:g} deg right', turn / speed),
+            mv([right[-1]], 'look', 'Camera: right side', look_s),
+            mv(left, 'inspect', f'Camera: turning the part {turn:g} deg left', 2 * turn / speed),
+            mv([left[-1]], 'look', 'Camera: left side', look_s),
+            mv(back, 'inspect', 'Camera: turning the part back', turn / speed),
+        ]
 
 
     def _fingertip_z(self):
@@ -1056,6 +1129,9 @@ class AutoPickPlace(CadPickPlace):
                                         f"{cfg['lift_height_m'] * 1000:.0f} mm). The grip did not hold its "
                                         f"{self.meta['mass_kg'] * 1000:.0f} g: try another grasp "
                                         'or raise the grip force in config/cell.json.')
+                if name == 'look':   # what the inspection camera sees (with --snapshots)
+                    side = 'right' if 'right' in phase['label'] else 'left'
+                    self.snapshot_camera(f'03b_camera_{side}', 'cam_inspection')
                 if name == 'transfer':
                     slip = pose_error(inv(site_T(self.model, self.data, TCP_SITE)) @ self.part_T(), T_tcp_part0)
                     st.info['slip_during_transport'] = {'mm': round(slip[0], 2), 'deg': round(slip[1], 2)}
@@ -1308,7 +1384,8 @@ def main():
                 message = run_on_real_robot(sim, doc, plan, args.robot_ip, args.robot_src, args.speed,
                                             go_home=args.mode == 'home',
                                             gripper_cfg=(cfg.get('real_gripper') or {}) if args.real_gripper else None,
-                                            pause_at_pick_s=float(cfg.get('debug_pause_at_pick_s', 0.0)))
+                                            pause_at_pick_s=float(cfg.get('debug_pause_at_pick_s', 0.0)),
+                                            smooth_motion=bool((cfg.get('real_motion') or {}).get('smooth', True)))
             except PlanError as e:
                 # Keep the window on the real robot's last pose (no physics stepping, which would move the arm).
                 status.update('failed', str(e), state='failed', ok=False)

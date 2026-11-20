@@ -1511,6 +1511,15 @@ html, body{
   grid-column: 1 / -1;
 }
 
+/* Simulation, Real Sim and Stop: big, easy to hit */
+.auto-pick-actions .auto-pick-big{
+  min-height: 44px;
+  padding: 10px 14px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: .2px;
+}
+
 .auto-pick-real{
   display: flex;
   flex-direction: column;

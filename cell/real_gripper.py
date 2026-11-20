@@ -26,13 +26,27 @@ def crc16_modbus(data):
     return struct.pack("<H", crc)
 
 
+# Position at which the fingers touch (0 mm). The 2F-85 stops at about 228, not 255 (it differs a little between
+# grippers): with 255 every opening came out too narrow (a 14 mm approach opening was really ~6 mm, so the fingers
+# hit the part). Measured 2026-11-20: closing on nothing reported 9.0 mm with 255, i.e. position 228.
+# Set from config/cell.json real_gripper.closed_pos (set_closed_pos).
+CLOSED_POS = 228.0
+
+
+def set_closed_pos(pos):
+    global CLOSED_POS
+    CLOSED_POS = float(pos)
+
+
 def width_to_pos(width_mm):
-    """Finger opening (mm) -> 2F-85 position command (0 open .. 255 closed), linear over the 85 mm stroke."""
-    return int(round(max(0.0, min(255.0, 255.0 * (1.0 - float(width_mm) / STROKE_MM)))))
+    """Finger opening (mm) -> 2F-85 position command (0 = 85 mm open .. CLOSED_POS = fingers touching; up to 255
+    to squeeze), linear over the 85 mm stroke."""
+    return int(round(max(0.0, min(255.0, CLOSED_POS * (1.0 - float(width_mm) / STROKE_MM)))))
 
 
 def pos_to_width(pos):
-    return STROKE_MM * (1.0 - float(pos) / 255.0)
+    """2F-85 position -> finger opening (mm); positions past CLOSED_POS (squeezing) read as 0."""
+    return max(0.0, STROKE_MM * (1.0 - float(pos) / CLOSED_POS))
 
 
 class RealGripper:

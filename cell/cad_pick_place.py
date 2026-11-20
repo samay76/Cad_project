@@ -18,6 +18,7 @@ import mujoco
 import mujoco.viewer
 
 from .build_robot import build
+from .cameras import inspection_camera
 from .frames import make_T, inv, T_to_pos_quat, web_pose_to_T, T_gbase_tcp, body_T, site_T
 from .ik import solve as ik_solve, N_ARM
 from .robots import get_robot
@@ -297,7 +298,8 @@ class CadPickPlace:
                         pick_station=(*self.station, self.seated) if self.station[1] is not None else None,
                         coupling_mm=float((cfg.get('gripper_coupling_mm') or {}).get(self.robot.id, {})
                                           .get(self.gripper, 0.0)),
-                        base_offset_mm=robot_base_offset(cfg, self.robot.id))
+                        base_offset_mm=robot_base_offset(cfg, self.robot.id),
+                        inspection_camera=inspection_camera(cfg))
         model0 = build(**build_kw)
         self.fingers = finger_map(model0, self.gripper, self.home)
         # The ghost shows the gripper as it grips: fingers at the contact width, not at the (wider) opening
@@ -447,6 +449,14 @@ class CadPickPlace:
         self._aim(cam)
         self.renderer.update_scene(self.data, cam)
         self._draw_path(self.renderer.scene)
+        import PIL.Image
+        PIL.Image.fromarray(self.renderer.render()).save(os.path.join(self.snap_dir, f'{name}.png'))
+
+    def snapshot_camera(self, name, camera):
+        """What a fixed camera of the scene (e.g. cam_inspection) sees, saved like snapshot()."""
+        if self.renderer is None or mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, camera) < 0:
+            return
+        self.renderer.update_scene(self.data, camera)
         import PIL.Image
         PIL.Image.fromarray(self.renderer.render()).save(os.path.join(self.snap_dir, f'{name}.png'))
 

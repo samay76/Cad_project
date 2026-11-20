@@ -40,6 +40,8 @@ def fast_fake(monkeypatch):
     """The fake robot moves 20x faster than 5 % speed, so a full run takes a few seconds."""
     orig = real_robot.FakeEC66.move_joints
     monkeypatch.setattr(real_robot.FakeEC66, 'move_joints', lambda self, deg, speed: orig(self, deg, 100.0))
+    orig_path = real_robot.FakeEC66.move_path
+    monkeypatch.setattr(real_robot.FakeEC66, 'move_path', lambda self, pts, speed, blend: orig_path(self, pts, 100.0, blend))
     monkeypatch.setattr(real_robot, 'POLL_HZ', 100)
 
 
@@ -63,7 +65,7 @@ def test_fake_run_completes_and_logs_every_stop(cell_run):
                                        gripper_cfg=cfg['real_gripper'])
     assert msg.startswith('Real grasp test done')
     stops = sim.status.info['real_stops']
-    assert len(stops) == sim.status.info['real_waypoints']
+    assert sum(s['points'] for s in stops) == sim.status.info['real_waypoints']   # every point, in smooth paths
     assert all(s['max_err_deg'] <= real_robot.ARRIVE_TOLERANCE_DEG for s in stops)
     assert 'real_closed_width_mm' in sim.status.info and 'real_joints_at_pick_deg' in sim.status.info
 
@@ -99,6 +101,9 @@ def test_stops_when_the_robot_does_not_reach_a_waypoint(cell_run, monkeypatch):
     orig = real_robot.FakeEC66.move_joints
     monkeypatch.setattr(real_robot.FakeEC66, 'move_joints',
                         lambda self, deg, speed: orig(self, np.asarray(deg) + [0, 0, 0, 0, 0, 3.0], 100.0))
+    orig_path = real_robot.FakeEC66.move_path
+    monkeypatch.setattr(real_robot.FakeEC66, 'move_path', lambda self, pts, speed, blend: orig_path(
+        self, [np.asarray(q) + [0, 0, 0, 0, 0, 3.0] for q in pts], 100.0, blend))
     stopped = []
     monkeypatch.setattr(real_robot.FakeEC66, 'stop', lambda self: stopped.append(True))
     with pytest.raises(PlanError, match='away from'):
@@ -154,3 +159,34 @@ def test_web_view_streams_the_cell(cell_run, tmp_path):
     assert len(data) == 6                     # the first frame + 5 at 30 fps
     i = scene['bodies'].index('link1')
     assert np.allclose(data[-1, 1 + 7 * i: 1 + 7 * i + 3], sim.data.xpos[sim.model.body('link1').id], atol=1e-6)
+
+
+def test_smooth_motion_stops_only_above_the_part_at_the_grip_and_at_the_end(cell_run):
+    """Smooth: home -> above the part is ONE motion (stops there), the straight approach another (stops at the grip),
+    and the way back another."""
+    sim, doc, plan, cfg = cell_run
+    sim.status.info.clear()
+    real_robot.run_on_real_robot(sim, doc, _short_waits(plan), 'fake', speed=5)
+    assert sim.status.info['real_smooth'] is True
+    stops = [s['phase'] for s in sim.status.info['real_stops']]
+    assert stops[:2] == ['pre-grasp', 'approach'] and stops[-1] == 'home'
+    assert len(stops) < sim.status.info['real_waypoints']
+
+
+def test_without_path_motion_it_moves_point_by_point(cell_run, monkeypatch):
+    """A controller that does not take path motion: one moveByJoint per point, as before."""
+    monkeypatch.setattr(real_robot.FakeEC66, 'move_path', lambda self, pts, speed, blend: False)
+    sim, doc, plan, cfg = cell_run
+    sim.status.info.clear()
+    real_robot.run_on_real_robot(sim, doc, _short_waits(plan), 'fake', speed=5)
+    assert sim.status.info['real_smooth'] is False
+    assert len(sim.status.info['real_stops']) == sim.status.info['real_waypoints']
+
+
+def test_gripper_widths_use_the_measured_closed_position():
+    """The 2F-85 touches at position ~228, not 255: 0 mm there, so an opening sent to it is really that wide."""
+    from cell.real_gripper import pos_to_width, set_closed_pos, width_to_pos
+    set_closed_pos(228)
+    assert width_to_pos(85) == 0 and width_to_pos(0) == 228
+    assert abs(pos_to_width(width_to_pos(14.0)) - 14.0) < 0.3
+    assert abs(pos_to_width(212) - 6.0) < 0.1          # the yoke ear, as the real gripper reported it

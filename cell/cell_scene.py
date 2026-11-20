@@ -16,6 +16,7 @@ import mujoco
 import numpy as np
 
 from .build_robot import build
+from .cameras import inspection_camera
 from .cad_pick_place import robot_base_offset, FingerMap, tray_half_for
 from .frames import inv, make_T
 from .paths import CACHE, load_config
@@ -23,7 +24,7 @@ from .pick_station import from_config as station_from_config, seated_pose
 from .web_view import WebView
 
 ROBOT, GRIPPER = 'ec66', '2f85'
-VERSION = 1
+VERSION = 2   # 2: inspection camera
 
 
 def build_cell(cfg=None):
@@ -38,7 +39,7 @@ def build_cell(cfg=None):
     coupling = float(cfg['gripper_coupling_mm'][ROBOT][GRIPPER])
     model = build(robot=ROBOT, coupling_mm=coupling, base_offset_mm=tuple(robot_base_offset(cfg, ROBOT)),
                   tray_xy=cfg['place_xy'], tray_half=tray_half_for(np.zeros((1, 3)), np.zeros(3), cfg),
-                  fine_fingers=True)
+                  fine_fingers=True, inspection_camera=inspection_camera(cfg))
     data = mujoco.MjData(model)
     home = np.radians(np.asarray(cfg['pick_motion']['home_joints_deg'][ROBOT], dtype=float))
     FingerMap(model, home).set_qpos(data.qpos, 85.0)      # open, as at home

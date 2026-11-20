@@ -19,11 +19,15 @@
   "place_release_height_m": 0.05,
   "pick_extra_depth_mm": 3.0,
   "_pick_extra_depth_comment": "Grip: the gripper's pick point is moved this many mm up the fingers, so the fingers go this much deeper along the approach than the marked points / taught pose (sim and real alike). 2026-11-20: 3 mm, on top of the 3 mm in robot_base_offset_mm z, because the real fingers still sat ~3 mm high on the yoke ear. 0 = exactly at the points.",
-  "debug_pause_at_pick_s": 10,
+  "debug_pause_at_pick_s": 0,
   "_debug_pause_comment": "TEMPORARY TEST: Real Sim stops at the pick location (grasp pose) for this many seconds with the fingers at the approach opening (as in the Sim), then grips and carries on. 0 = off.",
   "_place_release_comment": "Safety at the drop location: the gripper lowers the part only to this height above the tray floor and opens there (the part drops the rest). 0 = set it down.",
+  "real_motion": {"_comment": "Real Sim: smooth=true sends each stretch of the motion as ONE blended path (EC66 addPathPoint / moveByPath): the arm moves smoothly from home to just above the part and stops, goes straight down and stops, grips, lifts, and so on, instead of stopping at every waypoint. Corners are rounded by up to 10 mm in free space, 1 mm near the part. If the controller does not take path motion it falls back to one moveByJoint per waypoint (the run reports real_smooth=false). false = always one move per waypoint.",
+                  "smooth": true},
   "real_gripper": {"_comment": "Robotiq 2F-85 on the laptop's USB/RS-485 adapter, used by Real Sim when 'Real gripper' is ticked. speed / force 0..255 (64 = slow).",
-                   "port": "/dev/ttyUSB0", "baud": 115200, "slave": 9, "speed": 64, "force": 50},
+                   "port": "/dev/ttyUSB0", "baud": 115200, "slave": 9, "speed": 64, "force": 50,
+                   "_closed_pos_comment": "Position (0..255) where the fingers touch = 0 mm. Measured 228 on 2026-11-20 (closing on nothing). With 255 the real fingers opened too little and hit the part. To re-measure: close the gripper on nothing and read its position.",
+                   "closed_pos": 228},
   "robot_base_offset_mm": {"_comment": "Calibration: where the REAL robot base is relative to the table, compared with the table CAD, as [x, y, z] mm (z > 0: it stands higher). The sim moves the arm by this, so the planner sends the real arm to the real part. Measure with: python calibrate_robot.py (touch a table hole with the closed fingertips). Was a guessed 20 mm height; z 0.3 -> 3.3 on 2026-11-20: the real fingertips stopped 3 mm above the sim ones at the yoke pick.",
                            "ec66": [-5.5, -6.6, 3.3]},
   "gripper_coupling_mm": {"_comment": "Coupling plate between the tool flange and the gripper on the real robot (mm), measured: 22 mm. Sim TCP from the flange = 22 + 10.8 (2F-85 base) + 145 = 177.8 mm (pendant tool point: 178.8).",
@@ -52,11 +56,21 @@
     "standoff_mm": 2.0,
     "hold_s": 5
   },
+  "inspection": {
+    "_comment": "Camera stage of the full pick (grasp_test.enabled = false): grip, hold pick_motion.hold_after_grip_s, lift straight up out of the fixture, carry the part in a straight line to look_at (its centre of mass there), turn it turn_deg to the right (30 = a small test turn; was 60), hold hold_s, turn it to the left, hold, turn back, then put it in the bin (place_xy). The camera is on a stand beside the fixture, on the side away from the robot, looking down at look_at (just above the fixture) at about 30 deg. MuJoCo camera: cam_inspection. If the arm cannot do it for a grasp, the part goes straight to the bin and the plan says why.",
+    "enabled": true,
+    "camera_pos": [0.4996, -0.62, 0.36],
+    "look_at": [0.4996, -0.3402, 0.20],
+    "fovy_deg": 25,
+    "turn_deg": 30,
+    "turn_speed_deg_s": 20,
+    "hold_s": 1.0
+  },
   "grasp_test": {
     "_comment": "Sim-to-real grasp check. enabled=true: Sim and Real Sim only go to the taught pick point, wait wait_before_close_s, close the gripper on the part in the fixture, hold hold_closed_s, open, back out along the approach line and go home. No lift, camera or place. false = the full pick, camera and place again.",
-    "enabled": true,
+    "enabled": false,
     "wait_before_close_s": 5,
-    "hold_closed_s": 10
+    "hold_closed_s": 5
   },
   "pick_motion": {
     "_comment": "How the arm goes to pick. It starts at home (gripper pointing down at home_tcp_m, up over the middle of the table), turns the gripper there to the grasp orientation, travels in a straight line to the pre-grasp without turning, then approaches, grips and lifts slowly. Speeds are peak values (m/s for the TCP, rad/s for the joints). orient_first=false restores the direct move from home.",
@@ -69,6 +83,7 @@
     "travel_speed_m_s": 0.12,
     "approach_speed_m_s": 0.03,
     "grip_seconds": 1.5,
-    "lift_speed_m_s": 0.04
+    "lift_speed_m_s": 0.04,
+    "hold_after_grip_s": 5
   }
 }

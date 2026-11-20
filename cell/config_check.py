@@ -7,7 +7,7 @@ the wrong place, so a bad file is refused with a clear message instead of being 
 """
 import os
 import sys
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -52,6 +52,7 @@ class RealGripper(_M):
     slave: int = Field(9, ge=0, le=247)
     speed: int = Field(64, ge=0, le=255)
     force: int = Field(50, ge=0, le=255)
+    closed_pos: int = Field(228, ge=180, le=255)   # position where the fingers touch (0 mm)
 
 
 class GraspTest(_M):
@@ -73,6 +74,7 @@ class PickMotion(_M):
     approach_speed_m_s: float = Field(0.03, gt=0, le=0.2)
     grip_seconds: float = Field(1.5, gt=0, le=10)
     lift_speed_m_s: float = Field(0.04, gt=0, le=0.3)
+    hold_after_grip_s: float = Field(0.0, ge=0, le=60)
 
     @field_validator('home_joints_deg')
     @classmethod
@@ -87,6 +89,16 @@ class PickMotion(_M):
         return v
 
 
+class Inspection(_M):
+    enabled: bool = False
+    camera_pos: Tuple[float, float, float] = (0.5, -0.62, 0.36)
+    look_at: Tuple[float, float, float] = (0.5, -0.34, 0.20)
+    fovy_deg: float = Field(45.0, gt=5, le=120)
+    turn_deg: float = Field(60.0, ge=0, le=170)
+    turn_speed_deg_s: float = Field(20.0, gt=0, le=90)
+    hold_s: float = Field(1.0, ge=0, le=30)
+
+
 class CellConfig(_M):
     pick_xy: XY
     place_xy: XY
@@ -95,6 +107,7 @@ class CellConfig(_M):
     robot_base_offset_mm: dict
     gripper_coupling_mm: dict
     grasp_test: GraspTest
+    inspection: Inspection = Inspection()
     touch_test: TouchTest = TouchTest()
     pick_motion: PickMotion
     lift_height_m: float = Field(gt=0, le=0.4)

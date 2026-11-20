@@ -4,7 +4,7 @@ import mujoco, mujoco.viewer
 from .paths import MODELS
 from .world import add_world
 from .table_base import MOUNT_PLATE_TOP_Z
-from .cameras import add_cameras
+from .cameras import add_cameras, add_inspection_camera
 from .frames import T_gbase_tcp, T_to_pos_quat
 from .robots import get_robot, DEFAULT_ROBOT
 
@@ -12,7 +12,8 @@ from .robots import get_robot, DEFAULT_ROBOT
 
 def build(cad_meta=None, part_pos=(0.45, -0.10, 0.03), part_quat=(1, 0, 0, 0), tcp_offset_mm=145.0, gravcomp=False,
           fine_fingers=False, return_spec=False, extra=None, robot=DEFAULT_ROBOT, tray_xy=None, tray_half=None,
-          pick_station=None, coupling_mm=0.0, base_offset_mm=(0.0, 0.0, 0.0), gripper='2f85'):
+          pick_station=None, coupling_mm=0.0, base_offset_mm=(0.0, 0.0, 0.0), gripper='2f85',
+          inspection_camera=None):
     """Builds the cell: the EC66 arm with the Robotiq 2F-85, the table, tray and pick fixture, and the part.
 
     cad_meta       : a converted STEP part (step_to_mesh.convert) on a free joint at part_pos/part_quat; None = no part
@@ -24,6 +25,7 @@ def build(cad_meta=None, part_pos=(0.45, -0.10, 0.03), part_quat=(1, 0, 0, 0), t
     extra(spec)    : optional callback to add more elements (e.g. the ghost gripper) before compiling
     base_offset_mm : calibration (x, y, z mm): where the real robot base really is relative to the table CAD.
                      Measured with calibrate_robot.py.
+    inspection_camera : (position, look-at point, fovy) of the inspection camera (cameras.inspection_camera), or None
     coupling_mm    : coupling plate between the tool flange and the gripper (the gripper sits this much further out
                      along the flange's +Z), so the sim gripper is where the real one is
     """
@@ -90,6 +92,8 @@ def build(cad_meta=None, part_pos=(0.45, -0.10, 0.03), part_quat=(1, 0, 0, 0), t
         add_cad_part(arm, cad_meta, pos=part_pos, quat=part_quat)
 
     add_cameras(arm)
+    if inspection_camera is not None:
+        add_inspection_camera(arm, *inspection_camera)
     if extra is not None:
         extra(arm)
     if return_spec:

@@ -45,3 +45,34 @@ def add_cameras(spec):
     eye, target = np.array([1.3, -1.1, 0.95]), np.array([0.3, 0.0, 0.2])
     body = spec.worldbody.add_body(name='cam_full_view_body', pos=eye, quat=lookat_quat(eye, target))
     body.add_camera(name=CAM_FULL_VIEW).fovy = 55.0
+
+
+CAM_INSPECTION = 'cam_inspection'
+
+
+def inspection_camera(cfg):
+    """(camera position, look-at point, fovy) from config/cell.json "inspection", or None when it is off."""
+    insp = (cfg or {}).get('inspection') or {}
+    if not insp.get('enabled'):
+        return None
+    return (np.asarray(insp['camera_pos'], dtype=float), np.asarray(insp['look_at'], dtype=float),
+            float(insp.get('fovy_deg', 45.0)))
+
+
+def add_inspection_camera(spec, pos, look_at, fovy=45.0):
+    """The inspection camera: a camera housing on a stand from the floor, aimed at look_at (where the robot shows
+    the part), and a MuJoCo camera 'cam_inspection' that sees what it sees. The housing and the stand collide, so
+    the planner keeps the arm and the part clear of them."""
+    pos, look_at = np.asarray(pos, dtype=float), np.asarray(look_at, dtype=float)
+    G = mujoco.mjtGeom
+    body = spec.worldbody.add_body(name='inspection_camera', pos=pos, quat=lookat_quat(pos, look_at))
+    # camera frame: looks along -Z, +Y up
+    body.add_geom(name='inspection_cam_housing', type=G.mjGEOM_BOX, size=[0.045, 0.016, 0.022], pos=[0, 0, 0.022],
+                  rgba=[0.12, 0.13, 0.15, 1])
+    body.add_geom(name='inspection_cam_lens', type=G.mjGEOM_CYLINDER, size=[0.011, 0.004], pos=[0, 0, -0.003],
+                  rgba=[0.05, 0.25, 0.45, 1], contype=0, conaffinity=0)
+    body.add_camera(name=CAM_INSPECTION, fovy=fovy)
+    # stand: from the floor (table feet, ~0.8 m below the table top) up to the housing
+    floor, top = -0.80, pos[2] - 0.03
+    spec.worldbody.add_geom(name='inspection_cam_stand', type=G.mjGEOM_CYLINDER, size=[0.012, (top - floor) / 2],
+                            pos=[pos[0], pos[1], (top + floor) / 2], rgba=[0.55, 0.57, 0.6, 1])

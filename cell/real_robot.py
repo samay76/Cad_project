@@ -32,7 +32,7 @@ import mujoco
 import numpy as np
 
 from .cad_pick_place import PlanError, TCP_SITE
-from .real_gripper import FakeGripper, RealGripper, pos_to_width, width_to_pos
+from .real_gripper import FakeGripper, RealGripper, pos_to_width, set_closed_pos, width_to_pos
 from .frames import site_T
 from .ik import N_ARM
 
@@ -47,6 +47,8 @@ ARRIVE_TOLERANCE_DEG = 1.0      # max joint error accepted at a waypoint
 WAYPOINT_TOL_M = 0.003          # TCP deviation allowed between the reduced and the planned path
 NEAR_PART_TOL_M = 0.0005        # ... in the phases near the part (approach, lift, place, retreat): 0.5 mm
 NEAR_PART_PHASES = ('approach', 'lift', 'place', 'retreat')
+BLEND_MM = 10.0                 # smooth motion: corners between path points are rounded by up to this much (mm)
+NEAR_PART_BLEND_MM = 1.0        # ... near the part (approach, lift, place, retreat)
 JOINT_TOL_DEG = 2.0             # ... and joint deviation (keeps the wrist from swinging differently)
 WRIST_TABLE_MARGIN = 0.015      # wrist (link5) stays this far above the table top (m)
 PENDANT_MIN = (0.686, -0.486, 0.0)   # teach-pendant holder (main-sim world frame, table top z=0), from ec66_sim.py
@@ -108,6 +110,34 @@ class EC66:
     def move_joints(self, deg, speed_pct):
         return self.call("moveByJoint", {"targetPos": list(map(float, deg)), "speed": float(speed_pct)})
 
+    def move_path(self, points_deg, speed_pct, blend_mm):
+        """One smooth motion through all points (the controller's path: clearPathPoint, addPathPoint, moveByPath).
+        blend_mm[i]: how far before point i the robot may round the corner into the next segment (0 = pass exactly
+        through it); the last point is always reached exactly. Older firmware takes a 0..7 'smooth' level instead
+        of 'circular_radius': that is tried next. Returns False if the controller has no path motion."""
+        for style in ('radius', 'smooth'):
+            try:
+                self.call("clearPathPoint")
+                for k, (q, r) in enumerate(zip(points_deg, blend_mm)):
+                    last = k == len(points_deg) - 1
+                    p = {"wayPoint": list(map(float, q)), "moveType": 0, "speed": float(speed_pct)}
+                    if style == 'radius':
+                        p["circular_radius"] = 0.0 if last else float(r)
+                    else:
+                        p["smooth"] = 0 if last else int(min(7, max(0, round(r / 5.0))))
+                    if self.call("addPathPoint", p) is False:
+                        raise RuntimeError("addPathPoint returned False")
+                if self.call("moveByPath") in (False, -1):
+                    raise RuntimeError("moveByPath refused the path")
+                return True
+            except RuntimeError as e:
+                print(f"[real] path motion ({style}) not accepted: {e}", flush=True)
+        try:
+            self.call("clearPathPoint")
+        except RuntimeError:
+            pass
+        return False
+
     def stop(self):
         try:
             self.call("stop")
@@ -129,10 +159,24 @@ class FakeEC66:
         self.q = self.q0 + (0.5 - 0.5 * math.cos(math.pi * s)) * (self.target - self.q0)
         if s >= 1.0:
             self.target = None
+            if getattr(self, 'path', None):
+                self._next()
 
     def joints(self):
         self._update()
         return self.q.tolist()
+
+    def move_path(self, points_deg, speed_pct, blend_mm):
+        self._update()
+        self.path = [np.asarray(q, dtype=float) for q in points_deg]
+        self.path_speed = speed_pct
+        self._next()
+        return True
+
+    def _next(self):
+        q = self.path.pop(0)
+        self.q0, self.target, self.t0 = self.q.copy(), q, time.time()
+        self.dur = max(0.05, float(np.max(np.abs(self.target - self.q0))) / (150.0 * self.path_speed / 100.0))
 
     def mode(self):
         return "REMOTE"
@@ -146,6 +190,7 @@ class FakeEC66:
 
     def move_joints(self, deg, speed_pct):
         self._update()
+        self.path = []
         self.q0, self.target, self.t0 = self.q.copy(), np.asarray(deg, dtype=float), time.time()
         self.dur = max(0.2, float(np.max(np.abs(self.target - self.q0))) / (150.0 * speed_pct / 100.0))
         return True
@@ -218,7 +263,7 @@ def real_waypoints(model, data, plan):
     width = plan['phases'][0]['width']
     for phase in plan['phases']:
         info = {'phase': phase['name'], 'label': phase['label'], 'attached': phase['attached']}
-        if phase['name'] in ('wait', 'hold'):   # grasp test: stand still for this long
+        if phase['name'] in ('wait', 'hold', 'look'):   # stand still for this long (grasp test, after the grip, camera)
             out.append({**info, 'kind': 'wait', 'q': None, 'width': None, 'seconds': float(phase['seconds'])})
             continue
         if phase['name'] in ('grip', 'release'):
@@ -254,6 +299,25 @@ def real_waypoints(model, data, plan):
         steps.append(w)
         last = w['q']
     return steps
+
+
+def smooth_paths(steps):
+    """Joins consecutive moves into one smooth path ({'kind': 'path', 'moves': [...]}). A path ends (the robot stops
+    exactly there) before anything that is not a move (gripper, wait) and where the motion goes into or out of a
+    phase near the part, so the robot comes smoothly to just above the part, stops, goes straight down, and so on."""
+    out = []
+    for w in steps:
+        if w['kind'] != 'move':
+            out.append(w)
+            continue
+        prev = out[-1] if out and out[-1]['kind'] == 'path' else None
+        last = prev['moves'][-1] if prev else None
+        if prev is not None and (last['phase'] == w['phase'] or
+                                 (last['phase'] not in NEAR_PART_PHASES and w['phase'] not in NEAR_PART_PHASES)):
+            prev['moves'].append(w)
+        else:
+            out.append({'kind': 'path', 'phase': w['phase'], 'label': w['label'], 'moves': [w]})
+    return out
 
 
 def moves_of(steps):
@@ -387,7 +451,7 @@ class Stopped(Exception):
 
 
 def run_on_real_robot(sim, doc, plan, ip, src=None, speed=REAL_SPEED_DEFAULT, go_home=False, gripper_cfg=None,
-                      pause_at_pick_s=0.0):
+                      pause_at_pick_s=0.0, smooth_motion=True):
     """Moves the real robot through the plan (or, go_home, only to the plan's home pose by home_route);
     `sim` (AutoPickPlace) mirrors it. gripper_cfg (config/cell.json real_gripper) drives the real 2F-85 on USB;
     None = the gripper only moves in the sim. Returns a summary."""
@@ -451,6 +515,8 @@ def run_on_real_robot(sim, doc, plan, ip, src=None, speed=REAL_SPEED_DEFAULT, go
         sim._set_part_qpos(T_wp)
         width = {'now': plan['phases'][0]['width']}
         carried = {'on': False}
+        if gripper_cfg is not None:
+            set_closed_pos(gripper_cfg.get('closed_pos', 228))   # the 2F-85's real 0 mm position
         if gripper_cfg is not None and not go_home:   # Go Home does not need the gripper
             sim.phase('gripper', 'Connecting to the gripper on ' + gripper_cfg.get('port', '/dev/ttyUSB0') + '...')
             gripper = FakeGripper(width_to_pos(width['now'])) if fake else RealGripper(
@@ -492,7 +558,17 @@ def run_on_real_robot(sim, doc, plan, ip, src=None, speed=REAL_SPEED_DEFAULT, go
         grasp_test = bool(plan.get('graspTest'))
         if grasp_test:
             pause_at_pick_s = 0.0   # the plan has its own wait at the pick point
-        for w in wps:
+        smooth = {'on': bool(smooth_motion)}
+        st.info['real_smooth'] = smooth['on']
+
+        def record(phase, target, reached, points):
+            # sim-to-real record: where each move (or smooth path) was sent and where the robot really stopped
+            st.info.setdefault('real_stops', []).append({
+                'phase': phase, 'points': points, 'target_deg': [round(float(v), 3) for v in target],
+                'actual_deg': [round(float(v), 3) for v in reached],
+                'max_err_deg': round(float(np.max(np.abs(reached - target))), 3), 't_s': round(time.time() - t_begin, 2)})
+
+        for w in (smooth_paths(wps) if smooth['on'] else wps):
             if w['kind'] == 'wait':
                 t_end = time.time() + w['seconds']
                 shown = None
@@ -543,22 +619,33 @@ def run_on_real_robot(sim, doc, plan, ip, src=None, speed=REAL_SPEED_DEFAULT, go
                 carried['on'] = bool(w['attached'])
                 mirror(np.array(robot.joints()))
                 continue
-            k += 1
-            if gripper is None and w['width'] is not None:
-                width['now'] = w['width']
-            target = np.degrees(w['q'])
-            msg = f"REAL robot: {w['label']} (move {k}/{n_moves}, {speed:.0f}% speed)"
-            sim.phase(w['phase'], msg)
-            reply = robot.move_joints(target, speed)
-            if reply is False:
-                raise PlanError(f"The controller refused the move to '{w['phase']}' (moveByJoint returned False).")
-            reached = _wait_arrival(robot, target, mirror, w['phase'])
-            # sim-to-real record: where each move was sent and where the robot really stopped
-            stops = st.info.setdefault('real_stops', [])
-            stops.append({'phase': w['phase'], 'target_deg': [round(float(v), 3) for v in target],
-                          'actual_deg': [round(float(v), 3) for v in reached],
-                          'max_err_deg': round(float(np.max(np.abs(reached - target))), 3),
-                          't_s': round(time.time() - t_begin, 2)})
+            moves = w['moves'] if w['kind'] == 'path' else [w]
+            if gripper is None and moves[-1]['width'] is not None:
+                width['now'] = moves[-1]['width']
+            if len(moves) > 1 and smooth['on']:
+                # one smooth motion through all the points; it only stops at the last one
+                k += len(moves)
+                labels = ', then '.join(dict.fromkeys(mv['label'] for mv in moves))
+                sim.phase(moves[-1]['phase'], f"REAL robot: {labels} (smooth, {len(moves)} points, {speed:.0f}% speed)")
+                pts = [np.degrees(mv['q']) for mv in moves]
+                blend = [NEAR_PART_BLEND_MM if mv['phase'] in NEAR_PART_PHASES else BLEND_MM for mv in moves]
+                if robot.move_path(pts, speed, blend):
+                    target = pts[-1]
+                    reached = _wait_arrival(robot, target, mirror, moves[-1]['phase'])
+                    record(moves[-1]['phase'], target, reached, len(moves))
+                    continue
+                smooth['on'] = False      # this controller has no path motion: one move per point, as before
+                st.info['real_smooth'] = False
+                k -= len(moves)
+            for mv in moves:
+                k += 1
+                target = np.degrees(mv['q'])
+                sim.phase(mv['phase'], f"REAL robot: {mv['label']} (move {k}/{n_moves}, {speed:.0f}% speed)")
+                reply = robot.move_joints(target, speed)
+                if reply is False:
+                    raise PlanError(f"The controller refused the move to '{mv['phase']}' (moveByJoint returned False).")
+                reached = _wait_arrival(robot, target, mirror, mv['phase'])
+                record(mv['phase'], target, reached, 1)
         st.info['real_seconds'] = round(time.time() - t_begin, 1)
         moving = False
         if go_home:
