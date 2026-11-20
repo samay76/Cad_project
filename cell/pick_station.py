@@ -33,7 +33,8 @@ from .table_base import HOLE_GRID_ORIGIN, HOLE_GRID_PITCH, HOLE_GRID_MAX
 G = mujoco.mjtGeom
 DEFAULT_STEP = os.path.join(CAD, 'Fixture.step')
 CACHE_DIR = os.path.join(CACHE, 'pick_station')
-CONVERTER_VERSION = 3          # 2: + top disc; 3: fixtures without a column (anchor = plate centre)
+CONVERTER_VERSION = 7          # 2: + top disc; 3: fixtures without a column (anchor = plate centre); 4: BOTTOM_TOL_MM; 5: round columns only; 6, 7: plate top over counterbores
+BOTTOM_TOL_MM = 0.1           # a face this close to the bottom starts there (OCC pads the shape's bounding box ~0.02 mm)
 MAX_HOLE_ERROR_MM = 1.0       # a station hole further than this from a table hole does not fit a screw
 STATION_BODY = 'pickstation'  # fixture mode: the station geoms are on this static body (for the contact exclude)
 FIXTURE_WELD = 'fixture_hold'  # fixture mode: weld part <-> station, released when the gripper has closed
@@ -89,7 +90,7 @@ def analyse(step_path):
     # apart by how much of the circle they cover.
     arcs = {}
     for r, x, y, z0, z1, a, b in vertical:
-        if z0 <= lo[2] + 0.01 and z1 - z0 < 0.5 * height:
+        if z0 <= lo[2] + BOTTOM_TOL_MM and z1 - z0 < 0.5 * height:
             k = (round(x, 2), round(y, 2), round(r, 2))
             a0, b0 = arcs.get(k, (a, b))
             arcs[k] = (np.minimum(a0, a), np.maximum(b0, b))
@@ -103,13 +104,26 @@ def analyse(step_path):
     if len(hole_xy) < 2:
         raise RuntimeError(f'{step_path}: fewer than 2 screw holes found in the base plate')
     plate_top = min(z1 for r, x, y, z0, z1, a, b in vertical
-                    if z0 <= lo[2] + 0.01 and abs(r - hole_r) < 1e-3 and (round(x, 2), round(y, 2)) in
+                    if z0 <= lo[2] + BOTTOM_TOL_MM and abs(r - hole_r) < 1e-3 and (round(x, 2), round(y, 2)) in
                     {(round(px, 2), round(py, 2)) for px, py in hole_xy})
+    # A counterbore for the screw head continues the hole up to the plate's top face: take its top instead.
+    hole_keys = {(round(px, 2), round(py, 2)) for px, py in hole_xy}
+    plate_top = max([plate_top] + [z1 for r, x, y, z0, z1, a, b in vertical
+                                   if (round(x, 2), round(y, 2)) in hole_keys and r > hole_r + 0.5
+                                   and abs(z0 - plate_top) < BOTTOM_TOL_MM])
 
     # Column (optional): the tallest vertical cylinder above the plate, wider than a screw hole. Fixtures without
     # one (a plate with an upright, e.g. a scale) are anchored at the plate centre and collide with their own
-    # convex pieces (add_to_spec).
-    cols = [c for c in vertical if c[0] > hole_r + 0.5 and c[4] - c[3] > 0.3 * height]
+    # convex pieces (add_to_spec). Like the screw holes it must be (nearly) a full circle, possibly split into
+    # several faces or flattened (a double-D locating pin): the rounded plate corners are quarter cylinders.
+    cover = {}
+    for r, x, y, z0, z1, a, b in vertical:
+        k = (round(x, 2), round(y, 2), round(r, 2))
+        a0, b0 = cover.get(k, (a, b))
+        cover[k] = (np.minimum(a0, a), np.maximum(b0, b))
+    round_ = {k for k, (a, b) in cover.items() if np.all(b - a >= 1.7 * k[2])}
+    cols = [c for c in vertical if c[0] > hole_r + 0.5 and c[4] - c[3] > 0.3 * height
+            and (round(c[1], 2), round(c[2], 2), round(c[0], 2)) in round_]
     column = max(cols, key=lambda c: (c[4] - c[3], c[0])) if cols else None
 
     # Top disc: a vertical cylinder wider than the column that ends at the top face (a fixture's locating
@@ -286,7 +300,7 @@ def add_to_spec(spec, info, placement, seat_part=False):
         return (R @ (np.asarray(p_mm, dtype=float) / 1000.0) + [tx, ty]).tolist()
 
     spec.add_mesh(name='pickstation_visual', file=info['visual_stl'])
-    # The fixture loaded as the part too (e.g. the scale): the part draws it, the fixture only collides.
+    # The fixture loaded as the part too: the part draws it, the fixture only collides.
     shown = 0.0 if placement.get('same_as_part') else 1.0
     w.add_geom(name='pickstation_visual', type=G.mjGEOM_MESH, meshname='pickstation_visual',
                pos=[tx, ty, z0], quat=quat, rgba=[0.55, 0.62, 0.75, shown], contype=0, conaffinity=0, group=0)
@@ -305,7 +319,7 @@ def add_to_spec(spec, info, placement, seat_part=False):
                    **hidden)
     elif not placement.get('same_as_part'):
         # No column: the fixture's own convex pieces (CoACD, as for parts), in its STEP frame. Not when the fixture is
-        # loaded as the part too (the scale): the part's pieces are the same shape, and the fingers may touch those.
+        # loaded as the part too: the part's pieces are the same shape, and the fingers may touch those.
         from .step_to_mesh import convert
         meta = convert(placement['file'])
         for i, hull in enumerate(meta['collision_hulls']):

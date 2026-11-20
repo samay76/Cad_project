@@ -242,6 +242,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Automatic pick & place: two marked points -> grasp -> planned motion -> preview -> execute
   const logPanel = new LogPanel(layout.logContainer);
+  layout.logSink = (text, kind) => logPanel.add(text, kind); // messages go to the log window, not a pop-up
   autoPick = new AutoPickController(new AutoPickPanel(layout.autoPickContainer), {
     viewer,
     getGraspController: () => graspController,

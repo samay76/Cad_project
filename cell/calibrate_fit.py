@@ -3,16 +3,16 @@ calibrate_fit.py - Calibrates the robot base offset AND the gripper length from 
 
 One touch with the gripper pointing straight down cannot tell "the robot base is higher" from "the gripper is
 shorter": both move the fingertips up. Tilted picks then miss along the gripper's axis. With one more touch from
-another direction (the gripper level, fingertips flat against a face of the scale) both can be solved:
+another direction (the gripper level, fingertips flat against a face of the fixture) both can be solved:
 
   unknowns: robot_base_offset_mm (x, y, z) and gripper_coupling_mm (the gripper's distance from the flange)
 
 Each touch is recorded from the robot's joints (read only, the robot is not moved):
 
-  python -m cell.calibrate_fit record top                    # closed fingertips on the centre of the scale top,
+  python -m cell.calibrate_fit record top                    # closed fingertips on the centre of the fixture pin top,
                                                              # gripper straight down
-  python -m cell.calibrate_fit record face X Y Z NX NY NZ    # closed fingertips flat against the scale at the point
-                                                             # (scale frame, mm) on the face with that normal
+  python -m cell.calibrate_fit record face X Y Z NX NY NZ    # closed fingertips flat against the fixture at the point
+                                                             # (fixture frame, mm) on the face with that normal
   python -m cell.calibrate_fit list | clear
   python -m cell.calibrate_fit solve [--write]               # fit, show the residual of every touch, save
 
@@ -31,14 +31,14 @@ import numpy as np
 from .build_robot import build
 from .cad_pick_place import FingerMap, robot_base_offset
 from .paths import CONFIG_FILE, DATA, load_config
-from .calibrate_robot import SCALE_TOP_MM
+from .calibrate_robot import FIXTURE_TOP_MM
 
 TOUCHES = os.path.join(DATA, 'calibration', 'touches.json')
 ROBOT, GRIPPER = 'ec66', '2f85'
 
 
-def scale_world(cfg, p_mm, n=None):
-    """World position (m) of a point of the scale (cad/scale.step frame, mm) where the sim bolts it, and a normal."""
+def fixture_world(cfg, p_mm, n=None):
+    """World position (m) of a point of the fixture (its STEP frame, mm) where the sim bolts it, and a normal."""
     from .paths import repo_path
     from .pick_station import load, place, seated_pose
     ps = cfg['pick_station']
@@ -105,11 +105,11 @@ def equations(cfg, touch):
     """Rows A (n x 4: base x, y, z, coupling) and b (n) of the linear model, plus the current error (mm)."""
     tip, axis = tip_and_axis(cfg, touch['joints'])
     if touch['kind'] == 'top':
-        target, _ = scale_world(cfg, SCALE_TOP_MM)
+        target, _ = fixture_world(cfg, FIXTURE_TOP_MM)
         A = np.hstack([np.eye(3), axis[:, None]])
         b = target - tip
         return A, b, b * 1000.0
-    target, n = scale_world(cfg, touch['point'], touch['normal'])
+    target, n = fixture_world(cfg, touch['point'], touch['normal'])
     A = np.array([[*n, n @ axis]])
     b = np.array([n @ (target - tip)])
     return A, b, b * 1000.0
@@ -146,7 +146,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('command', choices=['record', 'list', 'clear', 'solve'])
     ap.add_argument('kind', nargs='?', choices=['top', 'face'])
-    ap.add_argument('point', nargs='*', type=float, help='face: X Y Z NX NY NZ (scale frame, mm and normal)')
+    ap.add_argument('point', nargs='*', type=float, help='face: X Y Z NX NY NZ (fixture frame, mm and normal)')
     ap.add_argument('--joints', nargs=6, type=float)
     ap.add_argument('--ip', default='192.168.1.200')
     ap.add_argument('--src')

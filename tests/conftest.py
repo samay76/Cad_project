@@ -22,7 +22,7 @@ def run_job(args, cwd=REPO, timeout=600):
 
 def write_config(tmp_path, name='cell.json', cell_fixture=False, **changes):
     """A copy of config/cell.json with top-level sections updated (e.g. grasp_test={'enabled': False}).
-    The pick tests use the round fixture main_part.step was made for; cell_fixture=True keeps the cell's (the scale)."""
+    The pick tests use the round fixture main_part.step was made for; cell_fixture=True keeps the cell's (cad/Fixture2.step + the yoke cad/Part3.step)."""
     with open(CONFIG) as f:
         cfg = json.load(f)
     if not cell_fixture:

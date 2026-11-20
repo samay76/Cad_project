@@ -40,8 +40,7 @@ export class PropertiesPanel {
         button.innerHTML = originalText;
       }, 1800);
     }).catch(() => {
-      // Fallback
-      prompt('Copy coordinates:', text);
+      console.warn('Clipboard not available; coordinates:', text);
     });
   }
 

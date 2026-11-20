@@ -39,6 +39,18 @@ Machine settings are in `.env` (see `.env.example`): host/port, Python, data fol
 `CELL_HOST=0.0.0.0` makes the app reachable from other PCs on the cell network. There is no login: only do that on
 a closed cell network.
 
+## Desktop app
+
+```bash
+desktop/install.sh        # once: Electron + "Pick Cell" in the applications menu and on the Desktop
+desktop/pick-cell         # or start it from the menu
+```
+
+One window, no browser. It rebuilds the interface if `web/src` changed, starts the server, and opens when the
+workspace is drawn. A server already running on `CELL_PORT` (e.g. the systemd service) is reused. Closing the
+window stops the server; if a job is running it asks first. Server log: `var/desktop/server.log`. File > Open Part
+(Ctrl+O), View > Developer Tools.
+
 ## Develop
 
 ```bash
@@ -93,22 +105,25 @@ them ~0.15 s behind, interpolated (`cell/web_view.py`, `web/src/autopick/LiveVie
   This is for measuring the sim-to-real gap.
 - `false`: pick, lift `lift_height_m`, carry to the tray at `place_xy`, release and go home.
 
-### Touch test (the scale)
+### Touch test
 
-`cad/scale.step` is the cell's fixture: a 55 mm base plate with an upright that has numbers on its faces. Load it
-as the part too, choose **Touch (1 point)** in the Auto Pick panel and click a number: **Plan to Point** plans the
-closed fingertips coming straight at it along the face's normal, stopping `touch_test.standoff_mm` (2 mm) before it,
-holding `hold_s` (5 s), backing out and going home. Sim reports where the fingertips stopped (distance to the face
-and sideways of the point); on the real robot, look at the scale. Click a face that looks towards the robot (+y).
-Up to three ways are planned (the gripper turned about the approach axis); pick one in the list.
+Load a part (e.g. the yoke `cad/Part3.step`), choose **Touch (1 point)** in the Auto Pick panel and click a point:
+**Plan to Point** plans the closed fingertips coming straight at it along the face's normal, stopping
+`touch_test.standoff_mm` (2 mm) before it, holding `hold_s` (5 s), backing out and going home. Sim reports where the
+fingertips stopped (distance to the face and sideways of the point). Pick a point the gripper can come straight at:
+the top of an ear works; low faces next to the fixture plate are out of reach. Up to three ways are planned (the
+gripper turned about the approach axis); pick one in the list.
 
 ### Parts and the fixture
 
-`pick_station` in `config/cell.json`: the fixture (now `cad/scale.step`) is bolted on the four small table holes
-(15,0) (15,1) (16,0) (16,1), counted from the hole at the lowest x and y on the 40 mm grid. The sim puts its screw
-holes on those table holes, centred between them like a bolted plate (worst hole 0.15 mm off: the scale's CAD hole
-spacing is 40.09 x 40.25 mm). A fixture without a round column collides with its own convex pieces. When the part
-loaded is the fixture itself, it is drawn once. The previous round fixture is `tests/fixtures/Fixture.step`.
+`pick_station` in `config/cell.json`: the fixture `cad/Fixture2.step` (Onshape document "yoke 794 + fixture") is the
+nest for the steering clamp yoke `cad/Part3.step`. It is bolted with 4 M6 on the small table holes (15,0) (15,1)
+(16,0) (16,1), counted from the hole at the lowest x and y on the 40 mm grid (CAD holes exactly 40 x 40 mm, 0 mm off).
+A double-D pin (its centre is the pick point) goes into the yoke bore and a 3 mm pocket shaped like the yoke foot
+holds it one way only. Both STEPs share one frame: table top z = 0, pin axis x = y = 0, yoke bottom z = 11. The sim
+models the fixture as its plate (to the top of the counterbores, z = 14) plus the pin as a column. The previous fixture
+(`cad/scale.step`) and its calibration touches are archived in `~/Cad_project_archive/2026-11-19/`; the old round
+fixture is `tests/fixtures/Fixture.step`.
 With `seat_all_parts: true`, every part is placed on it by its CAD coordinates, so **each part's STEP must be
 exported in the fixture's coordinate frame** (e.g. from the assembly with the fixture). A part that would float above
 the fixture or sit below the table is refused with a message saying so. The part's turn about the vertical axis

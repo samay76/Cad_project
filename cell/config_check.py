@@ -104,6 +104,7 @@ class CellConfig(_M):
     place_clearance_m: float = Field(ge=0, le=0.05)
     grip_force_limit: float = Field(5.0, gt=0, le=200)
     debug_pause_at_pick_s: float = Field(0.0, ge=0, le=60)
+    pick_extra_depth_mm: float = Field(0.0, ge=0, le=15)
 
     _pick = field_validator('pick_xy')(_xy)
     _place = field_validator('place_xy')(_xy)

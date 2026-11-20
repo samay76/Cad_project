@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Pick Cell
+GenericName=Robot pick & place
+Comment=EC66 + Robotiq 2F-85: teach, simulate and run pick & place
+Exec=@HERE@/pick-cell
+Icon=@HERE@/icon.png
+Terminal=false
+Categories=Development;Engineering;
+StartupWMClass=Pick Cell
+StartupNotify=true

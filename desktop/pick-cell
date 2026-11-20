@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Starts the Pick Cell desktop app (a second start brings the open window to the front).
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+export PYTHONPATH=   # a ROS (or other) PYTHONPATH from the desktop session must not leak into the cell's Python
+exec "$HERE/node_modules/.bin/electron" "$HERE" "$@"

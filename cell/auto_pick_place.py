@@ -181,7 +181,7 @@ class AutoPickPlace(CadPickPlace):
         self.marked_points = points
         note = ''
         if touch is not None:
-            # Touch test: the closed fingertips go to one marked point (e.g. a number on the scale) and stop there.
+            # Touch test: the closed fingertips go to one marked point (e.g. a face of the part) and stop there.
             plans, rejected, candidates, rejects = self._plan_touch(touch[0], touch[1], T_wp, n_plans)
             if not plans:
                 why = '; '.join(f'{k} ({v}x)' for k, v in rejected.most_common(3))
@@ -401,7 +401,10 @@ class AutoPickPlace(CadPickPlace):
         """Complete motion for one grasp, or CandidateRejected."""
         col, planner = self.collision, self.planner
         col.set_part(T_wp)
-        T_part_tcp = cand.T_part_tcp
+        # pick_extra_depth_mm: the fingers go this much further along the approach than the marked points (the real
+        # gripper stopped short of the sim one); pre-grasp, lift and the rest follow from this grasp pose.
+        depth = float(self.cfg.get('pick_extra_depth_mm', 0.0)) / 1000.0
+        T_part_tcp = cand.T_part_tcp @ make_T([0, 0, depth], [1, 0, 0, 0]) if depth else cand.T_part_tcp
         T_grasp = T_wp @ T_part_tcp
         inside = cand.mode == 'inside'
         pre_mm = float(self.pre_mm)
@@ -507,13 +510,15 @@ class AutoPickPlace(CadPickPlace):
         duration = sum(p['seconds'] for p in phases)
         for p in phases:
             self._add_tcp_samples(p, T_wp)
-        tcp = pose_json(T_part_tcp)
+        # The pose at the marked points (without pick_extra_depth_mm): the web sends it back when the gripper is
+        # jogged, so the extra depth must not be in it (it would be added twice).
+        tcp = pose_json(cand.T_part_tcp)
         approach_world = T_grasp[:3, 2]
         tilt = float(np.degrees(np.arccos(np.clip(-approach_world[2], -1, 1))))
         return {
             'grasp': {
                 'id': f'auto_{int(time.time() * 1000)}_{len(phases)}', 'name': 'Auto Grasp',
-                'tcpPose': tcp, 'rpy': rpy_json(T_part_tcp), 'openingWidth': width_in,
+                'tcpPose': tcp, 'rpy': rpy_json(cand.T_part_tcp), 'openingWidth': width_in,
                 'measuredGraspWidth': cand.width_mm if not inside else hold,   # fingers at contact
                 'contactPoints': {'left': self._mm_vec(cand.contacts[0]), 'right': self._mm_vec(cand.contacts[1])},
                 'preGraspDistance': pre_mm, 'tcpOffset': self.tcp_offset_mm, 'gripMode': cand.mode,
@@ -709,7 +714,7 @@ class AutoPickPlace(CadPickPlace):
         return {
             'grasp': {
                 'id': f'auto_{int(time.time() * 1000)}_{len(phases)}', 'name': 'Grasp Test',
-                'tcpPose': pose_json(T_part_tcp), 'rpy': rpy_json(T_part_tcp), 'openingWidth': width_in,
+                'tcpPose': pose_json(cand.T_part_tcp), 'rpy': rpy_json(cand.T_part_tcp), 'openingWidth': width_in,
                 'measuredGraspWidth': hold if inside else cand.width_mm,
                 'contactPoints': {'left': self._mm_vec(cand.contacts[0]), 'right': self._mm_vec(cand.contacts[1])},
                 'preGraspDistance': float(self.pre_mm), 'tcpOffset': self.tcp_offset_mm, 'gripMode': cand.mode,

@@ -1,0 +1,13 @@
+{
+  "name": "pick-cell-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pick Cell desktop app: the pick & place cell (EC66 + Robotiq 2F-85) in its own window",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^38.0.0"
+  }
+}

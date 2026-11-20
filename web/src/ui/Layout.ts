@@ -435,7 +435,14 @@ export class AppLayout {
 
   private toastTimer: number | null = null;
 
+  /** Where messages go instead of the pop-up once the log window exists (set by main.ts). */
+  public logSink: ((text: string, kind: 'info' | 'error') => void) | null = null;
+
   private showToast(title: string, message: string, variant: 'error' | 'info') {
+    if (this.logSink) {
+      this.logSink(`${title}: ${message}`, variant);
+      return;
+    }
     if (this.toastTimer !== null) {
       window.clearTimeout(this.toastTimer);
       this.toastTimer = null;
