@@ -28,6 +28,8 @@ import {
   type SimStatus
 } from './api';
 import { describeGrip } from './gripCue';
+import { friendly, friendlyEvent, type Job } from '../ui/friendly';
+import { acceptsPointClick, teachBanner } from '../ui/steps';
 
 export interface AutoPickDeps {
   viewer: Viewer;
@@ -38,6 +40,12 @@ export interface AutoPickDeps {
   restoreGrasp: (grasp: SavedGrasp) => Promise<void>;
   showError: (message: string, title: string) => void;
   log?: (text: string, kind: 'info' | 'ok' | 'error') => void; // the log window
+  /** Every job event (start, progress, end) for the operator screens: activity card and status pills. */
+  onEvent?: (job: Job, phase: 'start' | 'update' | 'ok' | 'error', raw: string, realGripper: boolean) => void;
+  /** The grip points changed (complete set, or [] when cleared): saved with the library part. */
+  onPointsChanged?: (mode: 'grip' | 'touch', points: MarkedPoint[]) => void;
+  /** The library fixture the loaded part sits on (its CAD is used in the simulation), or null. */
+  getFixtureId?: () => string | null;
 }
 
 const POLL_MS = 500;
@@ -90,6 +98,21 @@ export class AutoPickController {
   /** `${runId}:${candidate}` whose Sim ran to the end: Real Sim is allowed for exactly that plan and grasp. */
   private simChecked: string | null = null;
   private processRunning = false;
+  // For the operator screens
+  private job: Job = null; // the job started last
+  private jobStartedAt: number | null = null;
+  private phase: string | null = null;
+  private planError: string | null = null;
+  private sim: 'none' | 'running' | 'ok' | 'failed' = 'none';
+  private simMessage: string | null = null;
+  private robot: 'none' | 'running' | 'ok' | 'failed' = 'none';
+  private robotMessage: string | null = null;
+  /** Teach mode (only on the Teach grip step): the one thing that lets a click on the part place a point. */
+  private teachMode = false;
+  private banner: HTMLDivElement;
+  private hintTimer: number | null = null;
+  private hoverPending = false;
+  private overPart = false;
   private live: LiveView; // Sim / Real Sim shown live in the 3D view
   private jogGhost = false; // the teaching gripper is shown (Step Jogging) until the next plan
   /** grip: two marked points, one per finger; touch: the closed fingertips go to one marked point */
@@ -107,6 +130,11 @@ export class AutoPickController {
   ) {
     this.preview = new AutoPickPreview(deps.viewer.getScene(), () => deps.viewer.requestRender());
     this.live = new LiveView(deps.viewer, (hide) => this.hideTeaching(hide));
+    this.banner = document.createElement('div');
+    this.banner.className = 'op-teach-banner';
+    this.banner.setAttribute('role', 'status');
+    (deps.viewer.getDomElement().parentElement ?? document.body).appendChild(this.banner);
+    this.watchHover();
     panel.setEvents({
       onCalculate: () => this.calculate(),
       onClearPoints: () => this.clearPoints(),
@@ -116,7 +144,16 @@ export class AutoPickController {
       onStop: () => this.stop(),
       onRobotSettings: (settings) => this.setRealSettings(settings),
       onPickOffset: (offset) => this.setPickOffset(offset),
-      onMode: (mode) => this.setMode(mode)
+      onMode: (mode) => this.setMode(mode),
+      onTeachMode: (on) => this.setTeachMode(on),
+      onJog: (axis, mm) => {
+        this.deps.getGraspController()?.stepTranslate(axis, mm);
+        this.gripperMoved();
+      },
+      onTurn: (axis, deg) => {
+        this.deps.getGraspController()?.stepRotate(axis, deg);
+        this.gripperMoved();
+      }
     });
     this.refresh();
   }
@@ -135,7 +172,7 @@ export class AutoPickController {
     if (fixture) fixture.visible = !hide;
     // The arm's own gripper is the one you see; the teaching gripper only shows while you jog it (until you plan).
     this.deps.getGraspController()?.setVisible(this.jogGhost);
-    this.preview.setVisible(!hide);
+    this.preview.setVisible(true); // the planned path and "Place here" stay over the live cell (same part frame)
     this.deps.viewer.requestRender();
   }
 
@@ -152,6 +189,11 @@ export class AutoPickController {
     this.busy = false;
     this.status = null;
     this.simChecked = null;
+    this.planError = null;
+    this.sim = 'none';
+    this.simMessage = null;
+    this.robot = 'none';
+    this.robotMessage = null;
     this.preview.setPoints(this.points, this.partRoot(), this.gripCue());
     this.refresh();
   }
@@ -169,12 +211,102 @@ export class AutoPickController {
 
   /** A click on the part marks the next finger's point. A click after both are set starts over. */
   public markPoint(click: ClickedPointInfo) {
-    if (this.live.active) return; // clicks in the live cell do not mark points
-    if (!click.fromSurfaceClick || this.busy || this.preview.playing) return;
+    if (!click.fromSurfaceClick) return;
+    if (!acceptsPointClick(this.teachMode, { busy: this.busy, playing: this.preview.playing, liveView: this.live.active })) {
+      if (!this.teachMode) this.flashHint('Go to Teach grip to mark points');
+      return; // the points stay exactly as they are
+    }
     if (this.points.length === (this.mode === 'touch' ? 1 : 2)) this.points = [];
     this.points.push({ point: click.point, normal: click.normal });
     this.resetOffset();
     this.invalidate();
+    this.pointsChanged();
+  }
+
+  public get isTeachMode() {
+    return this.teachMode;
+  }
+
+  /** Set by the step panel from the current step (Teach grip on = teach mode on). */
+  public setTeachMode(on: boolean) {
+    if (on === this.teachMode) return;
+    this.teachMode = on;
+    if (this.hintTimer !== null) {
+      window.clearTimeout(this.hintTimer); // the "Go to Teach grip" hint makes way for the teach banner
+      this.hintTimer = null;
+    }
+    if (on) this.live.close(); // teaching happens on the part, not on the last run's live cell
+    this.updateBanner();
+  }
+
+  /** Saved grip points of a library part: shown again, ready for Find best grip. */
+  public restorePoints(mode: 'grip' | 'touch', points: MarkedPoint[]) {
+    this.mode = mode;
+    try {
+      localStorage.setItem(MODE_KEY, mode);
+    } catch {
+      // ignore storage errors
+    }
+    this.points = points.map((m) => ({ point: { ...m.point }, normal: { ...m.normal } }));
+    this.resetOffset();
+    this.invalidate();
+  }
+
+  /** Tells the library about a complete set of points, or that they were cleared. */
+  private pointsChanged() {
+    const need = this.mode === 'touch' ? 1 : 2;
+    if (this.points.length === need || this.points.length === 0) this.deps.onPointsChanged?.(this.mode, this.points);
+  }
+
+  private updateBanner() {
+    const el = this.banner;
+    if (this.hintTimer !== null) return; // a hint is showing; it calls back here when it ends
+    el.classList.toggle('visible', this.teachMode && !!this.deps.getPart().buffer);
+    el.classList.remove('is-hint');
+    el.textContent = teachBanner(this.mode, this.points.length);
+    this.deps.viewer.getDomElement().style.cursor = this.teachMode && this.overPart ? 'crosshair' : '';
+  }
+
+  private flashHint(text: string) {
+    if (!this.deps.getPart().buffer) return;
+    const el = this.banner;
+    el.textContent = text;
+    el.classList.add('visible', 'is-hint');
+    if (this.hintTimer !== null) window.clearTimeout(this.hintTimer);
+    this.hintTimer = window.setTimeout(() => {
+      this.hintTimer = null;
+      this.updateBanner();
+    }, 2000);
+  }
+
+  /** Crosshair cursor while the pointer is over the part in teach mode (one ray per frame at most). */
+  private watchHover() {
+    const dom = this.deps.viewer.getDomElement();
+    const caster = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    dom.addEventListener('pointermove', (e) => {
+      if (!this.teachMode || this.hoverPending) return;
+      this.hoverPending = true;
+      requestAnimationFrame(() => {
+        this.hoverPending = false;
+        const root = this.partRoot();
+        let over = false;
+        if (this.teachMode && root && root.visible) {
+          const r = dom.getBoundingClientRect();
+          ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+          caster.setFromCamera(ndc, this.deps.viewer.getCamera());
+          over = caster.intersectObject(root, true).length > 0;
+        }
+        if (over !== this.overPart) {
+          this.overPart = over;
+          dom.style.cursor = this.teachMode && over ? 'crosshair' : '';
+        }
+      });
+    });
+    dom.addEventListener('pointerleave', () => {
+      this.overPart = false;
+      dom.style.cursor = '';
+    });
   }
 
   private setMode(mode: 'grip' | 'touch') {
@@ -190,9 +322,11 @@ export class AutoPickController {
 
   public clearPoints() {
     this.live.close();
+    const had = this.points.length > 0;
     this.points = [];
     this.resetOffset();
     this.invalidate();
+    if (had) this.pointsChanged();
   }
 
   /** New points = a new pick spot: a jog or offset made for the old one no longer applies. */
@@ -211,6 +345,7 @@ export class AutoPickController {
   }
 
   public refresh() {
+    this.updateBanner();
     const { name, buffer } = this.deps.getPart();
     this.panel.render({
       partName: buffer ? name : null,
@@ -218,6 +353,22 @@ export class AutoPickController {
       points: this.points.map((m) => `(${m.point.x.toFixed(1)}, ${m.point.y.toFixed(1)}, ${m.point.z.toFixed(1)}) mm`),
       pointColors: POINT_COLORS,
       gripHint: this.gripCue(),
+      gapMm: this.points.length === 2
+        ? new THREE.Vector3(this.points[0].point.x, this.points[0].point.y, this.points[0].point.z).distanceTo(
+            new THREE.Vector3(this.points[1].point.x, this.points[1].point.y, this.points[1].point.z))
+        : null,
+      plan: (() => {
+        const pl = this.doc?.plans[this.selected];
+        return pl ? { mode: pl.mode, tiltDeg: pl.approachTiltDeg, touch: !!pl.touch, durationS: pl.durationS } : null;
+      })(),
+      planError: this.planError,
+      job: this.job,
+      jobStartedAt: this.jobStartedAt,
+      phase: this.phase,
+      sim: this.sim,
+      simMessage: this.simMessage,
+      robot: this.robot,
+      robotMessage: this.robotMessage,
       busy: this.busy,
       playing: this.preview.playing,
       status: this.status,
@@ -322,7 +473,8 @@ export class AutoPickController {
 
   private setStatus(text: string, kind: 'info' | 'ok' | 'error' = 'info') {
     this.status = { text, kind };
-    this.deps.log?.(text, kind); // the log window (right, bottom)
+    this.deps.log?.(text, kind); // the engineer log (Settings)
+    this.deps.onEvent?.(this.job, kind === 'error' ? 'error' : kind === 'ok' ? 'ok' : 'update', text, this.real.gripper);
     this.refresh();
   }
 
@@ -330,9 +482,18 @@ export class AutoPickController {
     return this.deps.viewer.getModelRoot();
   }
 
+  private startJob(job: Job) {
+    this.job = job;
+    this.jobStartedAt = performance.now();
+    this.phase = null;
+    this.deps.onEvent?.(job, 'start', '', this.real.gripper);
+  }
+
   // ---------------- calculate ----------------
   private async calculate() {
     this.live.close(); // back to teaching: the new plan is shown on the part
+    this.job = 'plan';
+    this.planError = null;
     const { name, buffer } = this.deps.getPart();
     const root = this.partRoot();
     const grasp = this.deps.getGraspController();
@@ -355,6 +516,7 @@ export class AutoPickController {
     this.doc = null;
     this.selected = 0;
     this.busy = true;
+    this.startJob('plan');
     this.setStatus('Starting the planner (the first run of a part converts its mesh, ~30 s)...');
 
     root.updateMatrixWorld(true);
@@ -379,6 +541,7 @@ export class AutoPickController {
           new THREE.Vector3(1, 1, 1)
         );
         this.points = this.movePointsWithGripper(after.multiply(before.invert()), root);
+        this.pointsChanged();
         this.preview.setPoints(this.points, root, this.gripCue());
       }
       this.taughtPose = {
@@ -410,12 +573,16 @@ export class AutoPickController {
         points: this.points,
         mode: this.mode,
         pickOffsetMm: { ...this.pickOffset },
-        graspPose: touch ? null : this.taughtPose
+        graspPose: touch ? null : this.taughtPose,
+        fixtureId: this.deps.getFixtureId?.() ?? undefined
       });
       this.plannedOffset = { ...this.pickOffset };
       this.runId = runId;
       this.watch(runId, async (ok, message) => {
-        if (!ok) return this.fail(message);
+        if (!ok) {
+          this.planError = message;
+          return this.fail(message);
+        }
         this.doc = await fetchPlan(runId);
         this.busy = false;
         const tipped = this.doc.part.tippedDeg > 5
@@ -428,6 +595,7 @@ export class AutoPickController {
         this.runInMujoco('approach'); // the arm's gripper drives to the marked point and stays there
       });
     } catch (err: any) {
+      this.planError = String(err?.message || err);
       this.fail(`Could not start the planner: ${err?.message || err}. Is the cell server running (python -m server)?`);
     }
   }
@@ -503,25 +671,35 @@ export class AutoPickController {
     const plan = this.doc?.plans[this.selected];
     if (!this.runId || !plan || this.planIsStale()) return;
     this.busy = true;
+    this.startJob(mode === 'execute' ? 'sim' : 'approach');
+    if (mode === 'execute') {
+      this.sim = 'running';
+      this.simMessage = null;
+    }
     this.setStatus(mode === 'execute' ? 'Starting the simulation...' : 'Putting the arm at the pick point...');
     try {
       const key = this.simKey();
       const runId = await startRun(this.runId, this.selected, mode);
       this.processRunning = true;
-      this.live.start(runId, mode === 'execute' ? 'Sim: MuJoCo physics' : 'Arm at the pick point', mode === 'execute');
+      this.live.start(runId, mode === 'execute' ? 'Simulation' : 'Moving to the part', mode === 'execute');
       this.watch(
         runId,
         (ok, message, st) => {
           this.busy = false;
-          this.live.finish(ok, message);
+          this.live.finish(ok, friendlyEvent(this.job, ok ? 'ok' : 'error', message).text);
+          if (mode === 'execute') {
+            this.sim = st?.state === 'done' ? 'ok' : 'failed';
+            this.simMessage = message;
+          }
           // The whole motion was played (even if the part missed the tray): the user has checked it.
           if (mode === 'execute' && st?.state === 'done' && key === this.simKey()) this.simChecked = key;
           if (ok) this.setStatus(message + (this.simChecked === key ? ' Real Sim is now enabled.' : ''), 'ok');
           else this.fail(message);
         },
-        (st) => st.state === 'running' && st.message && this.live.setMessage(st.message)
+        (st) => this.onProgress(st)
       );
     } catch (err: any) {
+      if (mode === 'execute') this.sim = 'failed';
       this.fail(`Could not start MuJoCo: ${err?.message || err}.`);
     }
   }
@@ -548,22 +726,28 @@ export class AutoPickController {
     );
     if (!ok) return;
     this.busy = true;
+    this.startJob('real');
+    this.robot = 'running';
+    this.robotMessage = null;
     this.setStatus(fake ? 'Starting Real Sim with the fake robot...' : `Connecting to the robot at ${ip}...`);
     try {
       const runId = await startRealRun(this.runId, this.selected, { ip, src, speed, gripper });
       this.processRunning = true;
-      this.live.start(runId, fake ? 'Real Sim: simulated robot (fake)' : `Real Sim: EC66 at ${ip} (live)`);
+      this.live.start(runId, fake ? 'Robot (test robot)' : 'Robot (live)');
       this.watch(
         runId,
         (done, message) => {
           this.busy = false;
-          this.live.finish(done, message);
+          this.robot = done ? 'ok' : 'failed';
+          this.robotMessage = message;
+          this.live.finish(done, friendlyEvent(this.job, done ? 'ok' : 'error', message).text);
           if (done) this.setStatus(message, 'ok');
           else this.fail(message);
         },
-        (st) => st.state === 'running' && st.message && this.live.setMessage(st.message)
+        (st) => this.onProgress(st)
       );
     } catch (err: any) {
+      this.robot = 'failed';
       this.fail(`Could not start Real Sim: ${err?.message || err}.`);
     }
   }
@@ -584,33 +768,53 @@ export class AutoPickController {
     );
     if (!ok) return;
     this.busy = true;
+    this.startJob('home');
+    this.robot = 'running';
+    this.robotMessage = null;
     this.setStatus(fake ? 'Go Home with the fake robot...' : `Connecting to the robot at ${ip}...`);
     try {
       const runId = await startRealRun(this.runId, this.selected, { ip, src, speed, gripper: false }, 'home');
       this.processRunning = true;
-      this.live.start(runId, fake ? 'Go Home: simulated robot (fake)' : `Go Home: EC66 at ${ip} (live)`);
+      this.live.start(runId, fake ? 'Going home (test robot)' : 'Going home (live)');
       this.watch(
         runId,
         (done, message) => {
           this.busy = false;
-          this.live.finish(done, message);
+          this.robot = done ? 'ok' : 'failed';
+          this.robotMessage = message;
+          this.live.finish(done, friendlyEvent(this.job, done ? 'ok' : 'error', message).text);
           if (done) this.setStatus(message, 'ok');
           else this.fail(message);
         },
-        (st) => st.state === 'running' && st.message && this.live.setMessage(st.message)
+        (st) => this.onProgress(st)
       );
     } catch (err: any) {
+      this.robot = 'failed';
       this.fail(`Could not start Go Home: ${err?.message || err}.`);
     }
   }
 
-  private async stop() {
+  /** Stop robot: sent whatever the screen shows. With nothing running the server answers "Nothing running". */
+  public async stop() {
     try {
       await stopRun();
-      this.setStatus('Stop sent.');
+      const job = this.job;
+      this.job = 'stop';
+      this.setStatus('Stop sent.', 'info');
+      this.job = job;
     } catch (err: any) {
       this.fail(`Could not send stop: ${err?.message || err}. Use the E-stop.`);
     }
+  }
+
+  /** A running job's status: its phase and message, in plain words on the live view. */
+  private onProgress(st: SimStatus) {
+    if (st.state !== 'running') return;
+    if (st.phase && st.phase !== this.phase) {
+      this.phase = st.phase;
+      this.refresh();
+    }
+    if (st.message) this.live.setMessage(friendly(st.message).text);
   }
 
   // ---------------- status polling ----------------

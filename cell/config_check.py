@@ -11,7 +11,7 @@ from typing import List, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from .paths import CONFIG_FILE, load_config, repo_path
+from .paths import CONFIG_FILE, load_config
 
 XY = List[float]
 
@@ -37,13 +37,7 @@ class PickStation(_M):
     seat_all_parts: bool = False
 
     _near = field_validator('near_xy')(_xy)
-
-    @field_validator('file', 'seated_part')
-    @classmethod
-    def _exists(cls, v):
-        if v is not None and not os.path.exists(repo_path(v)):
-            raise ValueError(f'file not found: {v}')
-        return v
+    # Missing CAD files are not an error: load_config finds renamed ones and switches a missing fixture off.
 
 
 class RealGripper(_M):

@@ -10,9 +10,8 @@ def test_fixture_sits_on_the_four_table_holes():
     from cell.pick_station import load, place
     with open(os.path.join(REPO, 'config', 'cell.json')) as f:
         ps = json.load(f)['pick_station']
-    assert ps['file'] == 'cad/Fixture2.step'
-    assert ps['seated_part'] == 'cad/Part3.step'
-    info = load(os.path.join(REPO, ps['file']))
+    assert ps['seat_all_parts'] is True   # every part (e.g. the yoke) sits on it in its CAD frame
+    info = load(os.path.join(REPO, 'tests', 'fixtures', 'cad', 'Fixture2.step'))   # test copy: cad/ may change
     assert len(info['holes_mm']) == 4 and abs(info['hole_radius_mm'] - 3.5) < 0.01    # 4 x M6 clearance
     p = place(info, ps['near_xy'], ps['yaw_deg'])
     assert sorted(p['table_holes']) == [[15, 0], [15, 1], [16, 0], [16, 1]]
@@ -23,7 +22,7 @@ def test_touch_a_point_on_the_yoke(tmp_path):
     cfg = write_config(tmp_path, cell_fixture=True)
     req = tmp_path / 'request.json'
     req.write_text(json.dumps({
-        'partFile': os.path.join(REPO, 'cad', 'Part3.step'), 'partFileName': 'Part3.step', 'mode': 'touch',
+        'partFile': os.path.join(REPO, 'tests', 'fixtures', 'cad', 'Part3.step'), 'partFileName': 'Part3.step', 'mode': 'touch',
         'partWorldPose': {'position': {'x': 0, 'y': 0, 'z': 0}, 'orientation': {'x': 0, 'y': 0, 'z': 0, 'w': 1}},
         'robotId': 'ec66', 'gripperId': '2f85', 'tcpOffset': 145, 'preGraspDistance': 100,
         # the top of the +x ear (its rounded end, highest point of the yoke): nothing above it

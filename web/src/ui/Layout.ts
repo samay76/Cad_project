@@ -1,19 +1,41 @@
+/**
+ * The operator layout:
+ *   header (name, job, robot / gripper status, settings, Stop robot - always there, always enabled)
+ *   stepper (Load part -> Teach grip -> Simulate -> Run on robot)
+ *   3D view (left) + the current step's panel (right)
+ *   "What happened" (bottom)
+ *   Settings drawer: robot connection, gripper, part pose, CAD properties, jogging, engineer log.
+ */
 import { GRIPPERS, type GripperId } from '../config';
+import type { Pill, Pills } from './friendly';
+import { icon } from './icons';
 
 export interface LayoutCallbacks {
   onFileSelected: (file: File) => void;
   onLoadGripperClick: () => void;
   onTransformModeToggle: (mode: 'translate' | 'rotate') => void;
   onTargetToggle?: (target: 'part' | 'gripper') => void;
+  onStop: () => void;
+  onResetView: () => void;
+  onTopView: () => void;
 }
+
+const THEME_KEY = 'ui.theme';
+
+const escapeHtml = (s: string) =>
+  s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 export class AppLayout {
   private root: HTMLElement;
   private callbacks: LayoutCallbacks;
 
-  // DOM Container references
+  // Mount points
   public topBarContainer!: HTMLElement;
-  public autoPickContainer!: HTMLElement;
+  public stepperContainer!: HTMLElement;
+  public autoPickContainer!: HTMLElement; // the step panel
+  public activityContainer!: HTMLElement;
+  public viewChipContainer!: HTMLElement;
+  public settingsRobotContainer!: HTMLElement;
   public partsListContainer!: HTMLElement;
   public viewportContainer!: HTMLElement;
   public gripperPanelContainer!: HTMLElement;
@@ -22,7 +44,7 @@ export class AppLayout {
   public logContainer!: HTMLElement;
 
   private fileInput!: HTMLInputElement;
-  private fileNameDisplay!: HTMLElement;
+  private jobText!: HTMLElement;
   private gripperStatusBadge!: HTMLElement;
   private dragOverlay!: HTMLElement;
   private loadingOverlay!: HTMLElement;
@@ -30,360 +52,333 @@ export class AppLayout {
   private errorToast!: HTMLElement;
   private errorMessage!: HTMLElement;
   private errorTitle!: HTMLElement;
+  private drawer!: HTMLElement;
+  private scrim!: HTMLElement;
 
-  // Floating toolbar buttons
   private btnTbEditGripper!: HTMLButtonElement;
   private btnTbEditPart!: HTMLButtonElement;
   private btnTbTrans!: HTMLButtonElement;
   private btnTbRot!: HTMLButtonElement;
 
+  private partName: string | null = null;
+  private selection: { fixture: string; part: string } | null = null;
+  private station = 1;
+
   constructor(root: HTMLElement, callbacks: LayoutCallbacks) {
     this.root = root;
     this.callbacks = callbacks;
+    this.applyTheme(this.savedTheme());
     this.initDOM();
     this.bindEvents();
   }
 
   private initDOM() {
     this.root.innerHTML = `
-      <div class="app-layout">
-        <!-- TOP BAR -->
-        <header class="app-header" id="top-bar-container">
-          <div class="header-left">
-            <div class="brand">
-              <div class="brand-icon">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-                  <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
-                  <line x1="12" y1="22.08" x2="12" y2="12"/>
-                </svg>
-              </div>
-              <div class="brand-text">
-                <span class="brand-title">COBOT PICK-POINT</span>
-                <span class="brand-subtitle">Teach · Sim · Real robot</span>
-              </div>
-            </div>
-
-            <div class="header-actions">
-              <input type="file" id="cad-file-input" class="hidden-file-input" accept=".step,.stp,.STEP,.STP,.stl,.STL,.obj,.OBJ,.iges,.igs,.IGES,.IGS,*" />
-              <button id="btn-load-cad" class="btn btn-primary" title="Open local CAD file (.step, .stp, .stl, .obj)">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="17 8 12 3 7 8"/>
-                  <line x1="12" y1="3" x2="12" y2="15"/>
-                </svg>
-                <span>Load CAD</span>
-              </button>
-
-              <!-- LOAD GRIPPER BUTTON -->
-              <button id="btn-load-gripper" class="btn btn-gripper" title="Load the selected gripper">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="7" y="11" width="10" height="9" rx="1"/>
-                  <path d="M12 2v5M9 7h6M8 11V7M16 11V7"/>
-                  <circle cx="10" cy="15" r="1"/>
-                  <circle cx="14" cy="15" r="1"/>
-                </svg>
-                <span>Load Gripper</span>
-              </button>
-
-              <!-- Loaded File Name Display -->
-              <div id="file-name-badge" class="file-badge">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                  <polyline points="14 2 14 8 20 8"/>
-                </svg>
-                <span class="badge-text" id="loaded-file-text">No CAD loaded</span>
-              </div>
+      <div class="op-layout">
+        <header class="op-header" id="top-bar-container">
+          <div class="op-brand">
+            <div class="op-brand-icon">${icon('box', 22)}</div>
+            <div class="op-brand-text">
+              <span class="op-brand-title">Pick-point</span>
+              <span class="op-brand-sub" id="op-job">Job: no part loaded · Station 1</span>
             </div>
           </div>
-
-          <div class="header-right">
-            <!-- Gripper Status Badge -->
-            <div class="gripper-badge" id="gripper-status-badge">
-              <span class="gripper-dot"></span>
-              <span class="gripper-text">Robotiq 2F-85 Active</span>
+          <div class="op-header-right">
+            <div class="op-pill" id="pill-robot" data-state="idle" role="status" aria-live="polite">
+              <span class="op-pill-icon"></span><span class="op-pill-text">Robot not checked yet</span>
             </div>
-
+            <div class="op-pill" id="pill-gripper" data-state="idle" role="status" aria-live="polite">
+              <span class="op-pill-icon"></span><span class="op-pill-text">Gripper not checked yet</span>
+            </div>
+            <button class="op-icon-btn" id="op-settings-btn" title="Settings" aria-label="Settings">${icon('settings', 22)}</button>
+            <button class="op-stop" id="op-stop" title="Stop the robot now. Keep a hand on the emergency stop as well.">
+              ${icon('stop', 22)}<span>Stop robot</span>
+            </button>
           </div>
         </header>
 
-        <!-- MAIN THREE-BLOCK WORKSPACE -->
-        <main class="app-workspace">
-          <!-- LEFT SIDEBAR (~260px) -->
-          <aside class="sidebar-left" id="left-sidebar-container">
-            <div id="auto-pick-mount"></div>
-            <div id="parts-list-mount"></div>
-          </aside>
+        <nav class="op-stepper" id="op-stepper" aria-label="Steps"></nav>
 
-          <!-- 3D VIEWPORT CENTER (Takes remaining space) -->
-          <section class="viewport-section" id="viewport-container">
-            <!-- VIEWPORT FLOATING TOOLBAR -->
-            <div class="viewport-toolbar" id="viewport-toolbar">
-              <div class="toolbar-target-group">
-                <button id="tb-btn-edit-gripper" class="tb-btn tb-btn-target active" title="Edit Gripper Pose (G)">Gripper</button>
-                <button id="tb-btn-edit-part" class="tb-btn tb-btn-target" title="Edit CAD Part Pose (P)">Part</button>
-              </div>
-
-              <div class="toolbar-divider"></div>
-
-              <div class="toolbar-group">
-                <button id="tb-btn-trans" class="tb-btn active" title="Translate (T)">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="5 9 2 12 5 15"/>
-                    <polyline points="9 5 12 2 15 5"/>
-                    <polyline points="15 19 12 22 9 19"/>
-                    <polyline points="19 9 22 12 19 15"/>
-                    <line x1="2" y1="12" x2="22" y2="12"/>
-                    <line x1="12" y1="2" x2="12" y2="22"/>
-                  </svg>
-                  <span>Move (T)</span>
-                </button>
-                <button id="tb-btn-rot" class="tb-btn" title="Rotate (R)">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
-                  </svg>
-                  <span>Rotate (R)</span>
-                </button>
-              </div>
-
-
-
+        <main class="op-main">
+          <section class="op-viewport viewport-section" id="viewport-container">
+            <div class="op-view-chip" id="op-view-chip"></div>
+            <div class="op-view-tools">
+              <button class="op-tool" id="op-help" aria-label="How to move the view">${icon('help', 20)}
+                <span class="op-tooltip" role="tooltip">
+                  <b>Left drag</b> rotate · <b>Right drag</b> pan · <b>Scroll</b> zoom<br>
+                  <b>Click the part</b> to place a grip point
+                </span>
+              </button>
+              <button class="op-tool" id="op-reset-view" title="Reset view" aria-label="Reset view">${icon('resetView', 20)}</button>
+              <button class="op-tool" id="op-top-view" title="Top view" aria-label="Top view">${icon('topView', 20)}</button>
             </div>
-
-            <!-- Drag and Drop Overlay -->
             <div class="drag-drop-overlay" id="drag-overlay">
               <div class="drag-drop-content">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="17 8 12 3 7 8"/>
-                  <line x1="12" y1="3" x2="12" y2="15"/>
-                </svg>
-                <h3>Drop CAD file here</h3>
-                <p>Supports .step, .stp, .stl, .obj</p>
+                ${icon('upload', 48)}
+                <h3>Drop the STEP file here</h3>
+                <p>.step, .stp, .stl or .obj</p>
               </div>
             </div>
-
-            <!-- Loading Spinner Overlay -->
             <div class="loading-overlay" id="loading-overlay">
               <div class="loading-spinner"></div>
-              <p class="loading-message" id="loading-message">Processing CAD geometry...</p>
-            </div>
-
-            <!-- Viewport HUD Overlay Instructions -->
-            <div class="viewport-hud">
-              <span class="hud-item"><b>Left Drag:</b> Rotate</span>
-              <span class="hud-item"><b>Right Drag:</b> Pan</span>
-              <span class="hud-item"><b>Scroll:</b> Zoom</span>
-              <span class="hud-item"><b>T / R:</b> Translate/Rotate Gizmo</span>
+              <p class="loading-message" id="loading-message">Opening the part…</p>
             </div>
           </section>
 
-          <!-- RIGHT SIDEBAR (~300px) -->
-          <aside class="sidebar-right" id="right-sidebar-container">
-            <div class="right-tab-bar">
-              <button class="right-tab-btn active" data-tab="gripper">Gripper & Grasp</button>
-              <button class="right-tab-btn" data-tab="part">Part Pose</button>
-              <button class="right-tab-btn" data-tab="cad">CAD Properties</button>
-            </div>
-            <div class="right-tab-content active" id="tab-gripper-content">
-              <div id="gripper-panel-mount"></div>
-            </div>
-            <div class="right-tab-content" id="tab-part-content">
-              <div id="part-panel-mount"></div>
-            </div>
-            <div class="right-tab-content" id="tab-cad-content">
-              <div id="properties-panel-mount"></div>
-            </div>
-            <div id="log-mount" class="log-mount"></div>
-          </aside>
+          <aside class="op-panel" id="auto-pick-mount"></aside>
         </main>
 
-        <!-- ERROR TOAST NOTIFICATION -->
-        <div class="error-toast" id="error-toast">
-          <div class="error-icon">⚠️</div>
-          <div class="error-content">
-            <div class="error-title" id="error-title">CAD Loading Error</div>
-            <div class="error-message" id="error-message">Failed to load CAD file.</div>
+        <section class="op-activity" id="op-activity" aria-label="Status"></section>
+
+        <div class="op-scrim" id="op-scrim"></div>
+        <aside class="op-drawer" id="op-drawer" aria-label="Settings" aria-hidden="true">
+          <div class="op-drawer-head">
+            <span class="op-drawer-title">Settings</span>
+            <button class="op-icon-btn" id="op-drawer-close" aria-label="Close settings">${icon('close', 22)}</button>
           </div>
-          <button class="btn-close-toast" id="btn-close-toast">✕</button>
+          <div class="op-drawer-body">
+            <details class="op-section" open>
+              <summary>Robot connection</summary>
+              <div id="op-settings-robot"></div>
+            </details>
+            <details class="op-section">
+              <summary>Gripper</summary>
+              <div class="op-section-body">
+                <div class="op-row">
+                  <div class="gripper-badge" id="gripper-status-badge">
+                    <span class="gripper-dot"></span><span class="gripper-text">Robotiq 2F-85</span>
+                  </div>
+                  <button id="btn-load-gripper" class="btn btn-secondary op-btn-sm">Load gripper</button>
+                </div>
+                <div id="gripper-panel-mount"></div>
+              </div>
+            </details>
+            <details class="op-section">
+              <summary>Part pose</summary>
+              <div class="op-section-body">
+                <div class="viewport-toolbar op-toolbar" id="viewport-toolbar">
+                  <div class="toolbar-target-group">
+                    <button id="tb-btn-edit-gripper" class="tb-btn tb-btn-target active" title="Edit gripper pose (G)">Gripper</button>
+                    <button id="tb-btn-edit-part" class="tb-btn tb-btn-target" title="Edit part pose (P)">Part</button>
+                  </div>
+                  <div class="toolbar-group">
+                    <button id="tb-btn-trans" class="tb-btn active" title="Move (T)">Move (T)</button>
+                    <button id="tb-btn-rot" class="tb-btn" title="Rotate (R)">Rotate (R)</button>
+                  </div>
+                </div>
+                <div id="part-panel-mount"></div>
+              </div>
+            </details>
+            <details class="op-section">
+              <summary>CAD properties</summary>
+              <div class="op-section-body">
+                <div id="properties-panel-mount"></div>
+                <div id="parts-list-mount"></div>
+              </div>
+            </details>
+            <details class="op-section">
+              <summary>Engineer log</summary>
+              <div id="log-mount" class="log-mount"></div>
+            </details>
+            <details class="op-section">
+              <summary>Display</summary>
+              <div class="op-section-body op-row">
+                <span>Dark mode</span>
+                <label class="op-switch"><input type="checkbox" id="op-dark" ${this.savedTheme() === 'dark' ? 'checked' : ''}><span></span></label>
+              </div>
+            </details>
+          </div>
+        </aside>
+
+        <input type="file" id="cad-file-input" class="hidden-file-input" accept=".step,.stp,.STEP,.STP,.stl,.STL,.obj,.OBJ,*" />
+
+        <div class="error-toast" id="error-toast">
+          <div class="error-icon">${icon('warn', 20)}</div>
+          <div class="error-content">
+            <div class="error-title" id="error-title">Problem</div>
+            <div class="error-message" id="error-message"></div>
+          </div>
+          <button class="btn-close-toast" id="btn-close-toast" aria-label="Close">${icon('close', 16)}</button>
         </div>
       </div>
     `;
 
-    this.topBarContainer = this.root.querySelector('#top-bar-container')!;
-    this.autoPickContainer = this.root.querySelector('#auto-pick-mount')!;
-    this.partsListContainer = this.root.querySelector('#parts-list-mount')!;
-    this.viewportContainer = this.root.querySelector('#viewport-container')!;
-    this.gripperPanelContainer = this.root.querySelector('#gripper-panel-mount')!;
-    this.partPanelContainer = this.root.querySelector('#part-panel-mount')!;
-    this.propertiesPanelContainer = this.root.querySelector('#properties-panel-mount')!;
-    this.logContainer = this.root.querySelector('#log-mount')!;
+    const q = <T extends HTMLElement>(sel: string) => this.root.querySelector<T>(sel)!;
+    this.topBarContainer = q('#top-bar-container');
+    this.stepperContainer = q('#op-stepper');
+    this.autoPickContainer = q('#auto-pick-mount');
+    this.activityContainer = q('#op-activity');
+    this.viewChipContainer = q('#op-view-chip');
+    this.settingsRobotContainer = q('#op-settings-robot');
+    this.partsListContainer = q('#parts-list-mount');
+    this.viewportContainer = q('#viewport-container');
+    this.gripperPanelContainer = q('#gripper-panel-mount');
+    this.partPanelContainer = q('#part-panel-mount');
+    this.propertiesPanelContainer = q('#properties-panel-mount');
+    this.logContainer = q('#log-mount');
 
-    this.fileInput = this.root.querySelector('#cad-file-input')!;
-    this.fileNameDisplay = this.root.querySelector('#loaded-file-text')!;
-    this.gripperStatusBadge = this.root.querySelector('#gripper-status-badge')!;
-    this.dragOverlay = this.root.querySelector('#drag-overlay')!;
-    this.loadingOverlay = this.root.querySelector('#loading-overlay')!;
-    this.loadingMessage = this.root.querySelector('#loading-message')!;
-    this.errorToast = this.root.querySelector('#error-toast')!;
-    this.errorMessage = this.root.querySelector('#error-message')!;
-    this.errorTitle = this.root.querySelector('#error-title')!;
+    this.fileInput = q('#cad-file-input');
+    this.jobText = q('#op-job');
+    this.gripperStatusBadge = q('#gripper-status-badge');
+    this.dragOverlay = q('#drag-overlay');
+    this.loadingOverlay = q('#loading-overlay');
+    this.loadingMessage = q('#loading-message');
+    this.errorToast = q('#error-toast');
+    this.errorMessage = q('#error-message');
+    this.errorTitle = q('#error-title');
+    this.drawer = q('#op-drawer');
+    this.scrim = q('#op-scrim');
 
-    this.btnTbEditGripper = this.root.querySelector('#tb-btn-edit-gripper')!;
-    this.btnTbEditPart = this.root.querySelector('#tb-btn-edit-part')!;
-    this.btnTbTrans = this.root.querySelector('#tb-btn-trans')!;
-    this.btnTbRot = this.root.querySelector('#tb-btn-rot')!;
+    this.btnTbEditGripper = q('#tb-btn-edit-gripper');
+    this.btnTbEditPart = q('#tb-btn-edit-part');
+    this.btnTbTrans = q('#tb-btn-trans');
+    this.btnTbRot = q('#tb-btn-rot');
   }
 
   private bindEvents() {
-    const loadBtn = this.root.querySelector('#btn-load-cad');
-    if (loadBtn) {
-      loadBtn.addEventListener('click', () => {
-        this.fileInput.value = '';
-        this.fileInput.click();
-      });
-    }
+    const on = (sel: string, ev: string, fn: (e: Event) => void) => this.root.querySelector(sel)?.addEventListener(ev, fn);
 
-    const loadGripperBtn = this.root.querySelector('#btn-load-gripper');
-    if (loadGripperBtn) {
-      loadGripperBtn.addEventListener('click', () => {
-        this.callbacks.onLoadGripperClick();
-      });
-    }
+    // Stop robot: always enabled, never waits for anything else.
+    on('#op-stop', 'click', () => this.callbacks.onStop());
+    on('#op-reset-view', 'click', () => this.callbacks.onResetView());
+    on('#op-top-view', 'click', () => this.callbacks.onTopView());
+    on('#op-help', 'click', (e) => (e.currentTarget as HTMLElement).classList.toggle('show-tip'));
+
+    on('#op-settings-btn', 'click', () => this.openSettings(true));
+    on('#op-drawer-close', 'click', () => this.openSettings(false));
+    on('#op-scrim', 'click', () => this.openSettings(false));
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.drawer.classList.contains('open')) this.openSettings(false);
+    });
+    on('#op-dark', 'change', (e) => this.applyTheme((e.target as HTMLInputElement).checked ? 'dark' : 'light', true));
+
+    on('#btn-load-gripper', 'click', () => this.callbacks.onLoadGripperClick());
 
     this.fileInput.addEventListener('change', () => {
-      if (this.fileInput.files && this.fileInput.files.length > 0) {
-        const file = this.fileInput.files[0];
-        this.callbacks.onFileSelected(file);
-      }
+      const file = this.fileInput.files?.[0];
+      if (file) this.handleFile(file);
     });
 
-    // Viewport Floating Toolbar Events
-    // Edit Target Switcher (Gripper vs Part)
-    this.btnTbEditGripper?.addEventListener('click', () => {
+    this.btnTbEditGripper.addEventListener('click', () => {
       this.setActiveTarget('gripper');
-      if (this.callbacks.onTargetToggle) {
-        this.callbacks.onTargetToggle('gripper');
-      }
+      this.callbacks.onTargetToggle?.('gripper');
     });
-
-    this.btnTbEditPart?.addEventListener('click', () => {
+    this.btnTbEditPart.addEventListener('click', () => {
       this.setActiveTarget('part');
-      if (this.callbacks.onTargetToggle) {
-        this.callbacks.onTargetToggle('part');
-      }
+      this.callbacks.onTargetToggle?.('part');
     });
-
     this.btnTbTrans.addEventListener('click', () => {
       this.setTransformMode('translate');
       this.callbacks.onTransformModeToggle('translate');
     });
-
     this.btnTbRot.addEventListener('click', () => {
       this.setTransformMode('rotate');
       this.callbacks.onTransformModeToggle('rotate');
     });
 
-
-    // Right Sidebar Tab Switcher
-    const rightTabBtns = this.root.querySelectorAll<HTMLButtonElement>('.right-tab-btn');
-    const tabGripper = this.root.querySelector('#tab-gripper-content');
-    const tabPart = this.root.querySelector('#tab-part-content');
-    const tabCad = this.root.querySelector('#tab-cad-content');
-
-    rightTabBtns.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        rightTabBtns.forEach((b) => b.classList.remove('active'));
-        btn.classList.add('active');
-        const tab = btn.dataset.tab;
-
-        tabGripper?.classList.toggle('active', tab === 'gripper');
-        tabPart?.classList.toggle('active', tab === 'part');
-        tabCad?.classList.toggle('active', tab === 'cad');
-
-        if (tab === 'part' && this.callbacks.onTargetToggle) {
-          this.setActiveTarget('part');
-          this.callbacks.onTargetToggle('part');
-        } else if (tab === 'gripper' && this.callbacks.onTargetToggle) {
-          this.setActiveTarget('gripper');
-          this.callbacks.onTargetToggle('gripper');
-        }
-      });
-    });
-
-    // Drag and Drop onto Viewport Container
+    // Drag and drop onto the 3D view
     let dragCounter = 0;
-    this.viewportContainer.addEventListener('dragenter', (e) => {
+    const vp = this.viewportContainer;
+    vp.addEventListener('dragenter', (e) => {
       e.preventDefault();
-      e.stopPropagation();
       dragCounter++;
       this.dragOverlay.classList.add('visible');
     });
-
-    this.viewportContainer.addEventListener('dragover', (e) => {
+    vp.addEventListener('dragover', (e) => e.preventDefault());
+    vp.addEventListener('dragleave', (e) => {
       e.preventDefault();
-      e.stopPropagation();
-    });
-
-    this.viewportContainer.addEventListener('dragleave', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounter--;
-      if (dragCounter <= 0) {
+      if (--dragCounter <= 0) {
         dragCounter = 0;
         this.dragOverlay.classList.remove('visible');
       }
     });
-
-    this.viewportContainer.addEventListener('drop', (e) => {
+    vp.addEventListener('drop', (e) => {
       e.preventDefault();
-      e.stopPropagation();
       dragCounter = 0;
       this.dragOverlay.classList.remove('visible');
-
-      if (e.dataTransfer && e.dataTransfer.files.length > 0) {
-        const file = e.dataTransfer.files[0];
-        if (/\.(jpe?g|png|gif|webp|bmp)$/i.test(file.name)) {
-          this.showError(`"${file.name}" is an image, not a CAD file. Drop a .step, .stp, .stl or .obj file.`, 'CAD Loading Error');
-          return;
-        }
-        this.callbacks.onFileSelected(file);
-      }
+      const file = e.dataTransfer?.files[0];
+      if (file) this.handleFile(file);
     });
 
-    // Error toast dismiss
-    const closeToastBtn = this.root.querySelector('#btn-close-toast');
-    if (closeToastBtn) {
-      closeToastBtn.addEventListener('click', () => {
-        this.errorToast.classList.remove('visible');
-      });
+    on('#btn-close-toast', 'click', () => this.errorToast.classList.remove('visible'));
+  }
+
+  /** Opens the file chooser (Load part step, File > Open Part). */
+  public pickFile() {
+    this.fileInput.value = '';
+    this.fileInput.click();
+  }
+
+  /** A file chosen or dropped anywhere: images are refused, the rest goes to the loader. */
+  public handleFile(file: File) {
+    if (/\.(jpe?g|png|gif|webp|bmp)$/i.test(file.name)) {
+      this.showError(`"${file.name}" is a picture, not a part. Use a STEP file.`, 'Load part');
+      return;
+    }
+    this.callbacks.onFileSelected(file);
+  }
+
+  public openSettings(open: boolean) {
+    this.drawer.classList.toggle('open', open);
+    this.scrim.classList.toggle('open', open);
+    this.drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+  }
+
+  private savedTheme(): 'light' | 'dark' {
+    try {
+      return localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light';
+    } catch {
+      return 'light';
     }
   }
 
-  public setActiveTarget(target: 'part' | 'gripper') {
-    this.btnTbEditGripper?.classList.toggle('active', target === 'gripper');
-    this.btnTbEditPart?.classList.toggle('active', target === 'part');
-
-    // Also update tabs if needed
-    const rightTabBtns = this.root.querySelectorAll<HTMLButtonElement>('.right-tab-btn');
-    const tabGripper = this.root.querySelector('#tab-gripper-content');
-    const tabPart = this.root.querySelector('#tab-part-content');
-
-    rightTabBtns.forEach((btn) => {
-      if (btn.dataset.tab === target) {
-        btn.classList.add('active');
-      } else if (btn.dataset.tab === 'gripper' || btn.dataset.tab === 'part') {
-        btn.classList.remove('active');
-      }
-    });
-
-    if (target === 'gripper') {
-      tabGripper?.classList.add('active');
-      tabPart?.classList.remove('active');
-    } else {
-      tabPart?.classList.add('active');
-      tabGripper?.classList.remove('active');
+  private applyTheme(theme: 'light' | 'dark', save = false) {
+    document.documentElement.dataset.theme = theme;
+    if (!save) return;
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      // ignore
     }
+  }
+
+  /** Robot / gripper status pills. Red ones show the one-line fix. */
+  public setPills(p: Pills) {
+    const set = (id: string, pill: Pill) => {
+      const el = this.root.querySelector<HTMLElement>(id)!;
+      el.dataset.state = pill.state;
+      el.title = pill.text;
+      el.querySelector('.op-pill-icon')!.innerHTML = icon(
+        pill.state === 'ok' ? 'checkCircle' : pill.state === 'error' ? 'error' : pill.state === 'warn' ? 'warn' : 'info',
+        16
+      );
+      el.querySelector('.op-pill-text')!.textContent = pill.text;
+    };
+    set('#pill-robot', p.robot);
+    set('#pill-gripper', p.gripper);
+  }
+
+  public setStation(n: number) {
+    this.station = n;
+    this.updateJob();
+  }
+
+  private updateJob() {
+    const what = this.selection
+      ? `Fixture ${this.selection.fixture} · ${this.selection.part}`
+      : `Job: ${this.partName ?? 'no part loaded'}`;
+    this.jobText.innerHTML = `${escapeHtml(what)} · Station ${this.station}`;
+  }
+
+  /** The fixture and part in use (fixture library), or null for a file opened directly. */
+  public setSelection(fixture: string | null, part: string | null) {
+    this.selection = fixture && part ? { fixture, part } : null;
+    this.updateJob();
+  }
+
+  public setActiveTarget(target: 'part' | 'gripper') {
+    this.btnTbEditGripper.classList.toggle('active', target === 'gripper');
+    this.btnTbEditPart.classList.toggle('active', target === 'part');
   }
 
   public setTransformMode(mode: 'translate' | 'rotate') {
@@ -395,38 +390,28 @@ export class AppLayout {
     this.gripperStatusBadge.classList.toggle('active', loaded);
   }
 
-  /** Names the gripper in the status badge. */
   public setActiveGripper(id: GripperId) {
     const text = this.gripperStatusBadge.querySelector('.gripper-text');
-    if (text) text.textContent = `${GRIPPERS[id].label} Active`;
-    const loadBtn = this.root.querySelector<HTMLButtonElement>('#btn-load-gripper');
-    if (loadBtn) loadBtn.title = `Load the ${GRIPPERS[id].label} gripper`;
+    if (text) text.textContent = GRIPPERS[id].label;
   }
 
   public setLoadedFileName(name: string) {
-    this.fileNameDisplay.textContent = name;
-    this.fileNameDisplay.parentElement?.classList.add('has-file');
+    this.partName = name;
+    this.updateJob();
   }
 
   public showLoading(isLoading: boolean, message?: string) {
-    if (isLoading) {
-      if (message) this.loadingMessage.textContent = message;
-      this.loadingOverlay.classList.add('visible');
-    } else {
-      this.loadingOverlay.classList.remove('visible');
-    }
+    if (message) this.loadingMessage.textContent = message;
+    this.loadingOverlay.classList.toggle('visible', isLoading);
   }
 
-  public showError(message: string, title = 'CAD Loading Error') {
+  public showError(message: string, title = 'Problem') {
     this.showToast(title, message, 'error');
   }
 
-  /** autoHideMs: close the message by itself after that time (short confirmations). */
   public showInfo(title: string, message: string, autoHideMs?: number) {
     this.showToast(title, message, 'info');
-    if (autoHideMs) {
-      this.toastTimer = window.setTimeout(() => this.hideToast(), autoHideMs);
-    }
+    if (autoHideMs) this.toastTimer = window.setTimeout(() => this.hideToast(), autoHideMs);
   }
 
   public hideToast() {
@@ -435,7 +420,7 @@ export class AppLayout {
 
   private toastTimer: number | null = null;
 
-  /** Where messages go instead of the pop-up once the log window exists (set by main.ts). */
+  /** Where messages go instead of the pop-up once the log exists (set by main.ts). */
   public logSink: ((text: string, kind: 'info' | 'error') => void) | null = null;
 
   private showToast(title: string, message: string, variant: 'error' | 'info') {
@@ -450,7 +435,6 @@ export class AppLayout {
     this.errorTitle.textContent = title;
     this.errorMessage.textContent = message;
     this.errorToast.classList.toggle('is-info', variant === 'info');
-    this.errorToast.querySelector('.error-icon')!.textContent = variant === 'info' ? 'ℹ️' : '⚠️';
     this.errorToast.classList.add('visible');
   }
 }

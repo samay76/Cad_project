@@ -36,7 +36,7 @@ def test_yoke_full_pick_holds_lifts_shows_the_camera_and_bins_it(tmp_path):
     cfg = write_config(tmp_path, cell_fixture=True, grasp_test={'enabled': False})
     req = tmp_path / 'request.json'
     req.write_text(json.dumps({
-        'partFile': os.path.join(REPO, 'cad', 'Part3.step'), 'partFileName': 'Part3.step',
+        'partFile': os.path.join(REPO, 'tests', 'fixtures', 'cad', 'Part3.step'), 'partFileName': 'Part3.step',
         'partWorldPose': {'position': {'x': 0, 'y': 0, 'z': 0}, 'orientation': {'x': 0, 'y': 0, 'z': 0, 'w': 1}},
         'robotId': 'ec66', 'gripperId': '2f85', 'tcpOffset': 145, 'preGraspDistance': 100,
         # the two faces of the -x ear (as marked in the web on 2026-11-20)
@@ -72,7 +72,7 @@ def test_sim_full_pick_places_the_part_in_the_tray(full_plan, tmp_path):
     assert code == 0 and st['info']['part_in_tray'], st['message']
 
 
-@pytest.mark.parametrize('part', ['cad/part2.step', 'cad/Paart1.step'])
+@pytest.mark.parametrize('part', ['tests/fixtures/cad/part2.step', 'tests/fixtures/cad/Paart1.step'])
 def test_other_parts_sit_on_the_fixture_and_plan(part, tmp_path):
     cfg = write_config(tmp_path)
     req = make_request(tmp_path, part=part, points=False)

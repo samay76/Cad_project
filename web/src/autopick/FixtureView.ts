@@ -34,6 +34,7 @@ const base64ToBuffer = (b64: string) => {
 export class FixtureView {
   private group: THREE.Group | null = null;
   private loadedFor: string | null = null; // fixture name + sha it was built from
+  private source: string | null = null; // fixture library id, or null for config/cell.json's pick_station
 
   constructor(private viewer: Viewer) {}
 
@@ -42,11 +43,16 @@ export class FixtureView {
     return this.group !== null;
   }
 
+  /** Which fixture to draw: a fixture of the library (its own CAD), or null for the config's pick fixture. */
+  public setSource(libraryFixtureId: string | null) {
+    this.source = libraryFixtureId;
+  }
+
   /** Call after a part was loaded: shows the fixture under it if it is the fixture's part, else removes it. */
   public async update(partBuffer: ArrayBuffer | null): Promise<boolean> {
     let info: FixtureInfo | null = null;
     try {
-      const resp = await fetch('/api/mujoco/fixture');
+      const resp = await fetch(this.source ? `/api/mujoco/fixture?library=${encodeURIComponent(this.source)}` : '/api/mujoco/fixture');
       const res = await resp.json();
       info = res?.ok ? res.fixture : null;
     } catch {
@@ -60,7 +66,7 @@ export class FixtureView {
       this.remove();
       return false;
     }
-    const key = `${info.name}:${info.base64.length}`; // the fixture's file, whichever part sits on it
+    const key = `${this.source ?? 'config'}:${info.name}:${info.base64.length}`; // the fixture's file, whichever part sits on it
     if (this.group && this.loadedFor === key) {
       this.viewer.getScene().add(this.group); // the part was reloaded: keep the same fixture
       this.place();

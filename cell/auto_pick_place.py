@@ -1327,6 +1327,15 @@ def main():
         with open(args.config) as f:
             cfg = json.load(f)
         step, req, q_part = load_request(args)
+        # A part from the fixture library sits on that library fixture: its STEP replaces pick_station.file
+        # (same mounting rules: bolted on the table grid near pick_station.near_xy, every part seated on it).
+        fixture_file = req.get('fixtureFile')
+        if fixture_file:
+            if not os.path.exists(fixture_file):
+                raise PlanError(f'The fixture file {os.path.basename(fixture_file)} is missing.')
+            cfg['pick_station'] = {**(cfg.get('pick_station') or {}), 'enabled': True, 'file': fixture_file,
+                                   'seat_all_parts': True}
+            cfg['pick_station'].pop('seated_part', None)
         # web_view (config): Sim / Real Sim are watched live in the web app; the MuJoCo window is optional
         web_cfg = {'enabled': True, 'mujoco_window': False, **(cfg.get('web_view') or {})}
         headless = args.headless or args.mode == 'plan' or not web_cfg['mujoco_window']

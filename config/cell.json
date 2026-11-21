@@ -8,7 +8,6 @@
     "file": "cad/Fixture2.step",
     "near_xy": [0.4996, -0.3402],
     "yaw_deg": 0,
-    "seated_part": "cad/Part3.step",
     "seat_all_parts": true,
     "_seat_all_comment": "true: EVERY part loaded in the web goes on the fixture the way main_part does (its STEP frame = the fixture's STEP frame), because all parts share the same mounting; only the pick points change. Each part's STEP must be exported in the fixture's coordinate frame. false: only seated_part goes on it.",
     "_fixture_comment": "cad/Fixture2.step (Onshape doc 'yoke 794 + fixture') is the nest for the steering clamp yoke cad/Part3.step: a 100 x 90 x 14 mm plate bolted with 4 M6 on the small table holes (15,0) (15,1) (16,0) (16,1) (40 mm grid, counted from the hole at the lowest x and y), a double-D locating pin (centre of the 4 holes) that goes into the yoke bore and a 3 mm pocket shaped like the yoke foot, so the yoke sits only one way. Both STEPs share one frame: table top z = 0, pin axis x = y = 0, yoke bottom z = 11. The previous fixture (cad/scale.step) is archived in ~/Cad_project_archive/2026-11-19; the old round Fixture.step is in tests/fixtures."

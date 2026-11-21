@@ -89,3 +89,21 @@ export const applyGripperSpec = (spec: GripperSpec) => {
   GRIPPER_CONFIG.defaultOpeningWidth = spec.maxOpeningWidth;
   GRIPPER_CONFIG.defaultTcpOffset = spec.defaultTcpOffset;
 };
+
+/**
+ * Robot speed for the operator's Slow / Normal / Fast choice (joint speed %, Run on robot step).
+ * The cell server refuses more than 10 % (server/app.py, cell/real_robot.py REAL_SPEED_MAX), so keep these 1..10.
+ */
+export const SPEED_PRESETS = { slow: 3, normal: 6, fast: 10 } as const;
+export type SpeedPreset = keyof typeof SPEED_PRESETS;
+
+/** Jog step sizes of the Fine-tune pad: mm per move / degrees per turn. */
+export const JOG_STEPS = {
+  fine: { mm: 1, deg: 1 },
+  normal: { mm: 5, deg: 15 },
+  coarse: { mm: 25, deg: 90 }
+} as const;
+export type JogStep = keyof typeof JOG_STEPS;
+
+/** Shown in the header as "Station <n>". */
+export const STATION_NUMBER = 1;

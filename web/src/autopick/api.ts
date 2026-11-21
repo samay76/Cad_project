@@ -64,6 +64,7 @@ export interface PlanRequest {
   mode: 'grip' | 'touch';
   pickOffsetMm: { x: number; y: number; z: number }; // added to the grasp position, robot base frame
   graspPose: Pose | null; // gripper pose set in the view (part frame, mm): planned exactly when given
+  fixtureId?: string; // fixture library: the part sits on this fixture's own CAD (else config pick_station)
 }
 
 export const arrayBufferToBase64 = (buf: ArrayBuffer): string => {

@@ -16,6 +16,7 @@ The API is the one the web app calls (web/src/autopick/api.ts); each job runs as
   GET  /api/mujoco/view/mesh/<hash>               one mesh of the cell (cached by the browser)
   GET  /api/cell/scene, /api/cell/frames           the cell without a part (EC66 at home), for the teaching view
   GET  /api/health             server, config and job state
+  /api/library/...             fixture library: fixtures and their STEP parts (library.py)
 
 Everything else serves web/dist (npm run build). Nothing outside web/dist and the run folders is served.
 """
@@ -77,6 +78,7 @@ class PlanBody(BaseModel):
     mode: Literal['grip', 'touch'] = 'grip'   # touch: the closed fingertips go to the one marked point
     pickOffsetMm: Optional[Vec3] = None
     graspPose: Optional[Pose] = None
+    fixtureId: Optional[str] = Field(None, pattern=r'^[0-9a-f]{12}$')   # fixture library: plan on this fixture
 
     @model_validator(mode='after')
     def _count(self):
@@ -177,6 +179,11 @@ def create_app(settings=None):
             run_id, run_dir, part_path = jobs.new_run(b.partFileName, part)
         except ValueError as e:
             return _bad(str(e))
+        fixture_file = None
+        if b.fixtureId:
+            fixture_file = app.state.library.fixture_path(b.fixtureId)
+            if not fixture_file:
+                return _bad('This fixture has no fixture CAD file. Add it in the fixture window first.')
         request_path = os.path.join(run_dir, 'request.json')
         with open(request_path, 'w') as f:
             json.dump({
@@ -186,6 +193,7 @@ def create_app(settings=None):
                 'preGraspDistance': b.preGraspDistance, 'points': [p.model_dump() for p in b.points], 'mode': b.mode,
                 'pickOffsetMm': (b.pickOffsetMm or Vec3(x=0, y=0, z=0)).model_dump(),
                 'graspPose': b.graspPose.model_dump() if b.graspPose else None,
+                'fixtureFile': fixture_file,
             }, f, indent=2)
         jobs.launch(run_id, ['--request', request_path, '--plan', os.path.join(run_dir, 'plan.json'), '--mode', 'plan'])
         return {'ok': True, 'runId': run_id}
@@ -234,8 +242,17 @@ def create_app(settings=None):
         return FileResponse(path, media_type='application/json', headers={'Cache-Control': 'no-store'})
 
     @app.get('/api/mujoco/fixture')
-    def fixture():
+    def fixture(library: str = ''):
         from cell.paths import load_config, repo_path
+        if library:   # a fixture of the fixture library: every part goes on it
+            path = app.state.library.fixture_path(library)
+            if not path:
+                return {'ok': True, 'fixture': None}
+            with open(path, 'rb') as f:
+                data = f.read()
+            return {'ok': True, 'fixture': {'name': app.state.library.fixture_file_name(library),
+                                            'base64': base64.b64encode(data).decode('ascii'),
+                                            'seatedSha256': '', 'seatAll': True}}
         ps = load_config(s.config_file).get('pick_station') or {}
         seat_all = bool(ps.get('seat_all_parts'))
         if not ps.get('enabled') or not ps.get('file') or not (ps.get('seated_part') or seat_all):
@@ -325,7 +342,10 @@ def create_app(settings=None):
         path = os.path.join(cell_dir['path'], 'frames.bin') if cell_dir['path'] else cell_file('frames.bin')
         return FileResponse(path, media_type='application/octet-stream', headers={'Cache-Control': 'no-store'})
 
-    @app.api_route('/api/{rest:path}', methods=['GET', 'POST', 'PUT', 'DELETE'])
+    from .library import register as register_library
+    register_library(app, s.data_dir, body_of)   # fixture library: /api/library/...
+
+    @app.api_route('/api/{rest:path}', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
     def api_unknown(rest: str):
         return _bad(f'Unknown API /api/{rest}', 404)
 

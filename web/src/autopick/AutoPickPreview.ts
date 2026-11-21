@@ -14,7 +14,46 @@ const CUE_OK_COLOR = 0x14b8a6;
 const CUE_BAD_COLOR = 0xef4444;
 const CUE_RADIUS_MM = 11; // about half a finger pad's width on both grippers
 
-export const POINT_COLORS = ['#f97316', '#a855f7'];
+export const POINT_COLORS = ['#D85A30', '#7F77DD']; // finger 1 orange, finger 2 purple
+const PATH_COLOR = 0x2563eb;
+const PLACE_COLOR = 0x16a34a;
+
+/** A label that always faces the camera and stays readable on top of everything. */
+function labelSprite(text: string, bg: string, heightMm: number, round = false): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d')!;
+  const font = 'bold 44px system-ui, sans-serif';
+  ctx.font = font;
+  const w = round ? 64 : Math.ceil(ctx.measureText(text).width) + 40;
+  canvas.width = w;
+  canvas.height = 64;
+  ctx.font = font;
+  ctx.fillStyle = bg;
+  ctx.beginPath();
+  if (round) ctx.arc(32, 32, 30, 0, Math.PI * 2);
+  else ctx.roundRect(0, 4, w, 56, 14);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, w / 2, 34);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+  sprite.scale.set((heightMm * w) / 64, heightMm, 1);
+  sprite.renderOrder = 12;
+  return sprite;
+}
+
+function disposeTree(root: THREE.Object3D) {
+  root.traverse((obj) => {
+    const item = obj as THREE.Mesh;
+    item.geometry?.dispose();
+    const mat = item.material as (THREE.Material & { map?: THREE.Texture | null }) | undefined;
+    mat?.map?.dispose();
+    mat?.dispose?.();
+  });
+}
 
 export class AutoPickPreview {
   private group = new THREE.Group();
@@ -43,11 +82,7 @@ export class AutoPickPreview {
 
   /** Marks where each finger should go, visible even through the gripper. */
   public setPoints(points: MarkedPoint[], partRoot: THREE.Object3D | null, cue: GripCue | null = null) {
-    this.markers.traverse((obj) => {
-      const item = obj as THREE.Mesh;
-      item.geometry?.dispose();
-      (item.material as THREE.Material | undefined)?.dispose?.();
-    });
+    disposeTree(this.markers);
     this.markers.clear();
     if (partRoot) {
       const size = new THREE.Box3().setFromObject(partRoot).getSize(new THREE.Vector3());
@@ -60,6 +95,10 @@ export class AutoPickPreview {
         sphere.renderOrder = 10;
         sphere.position.set(m.point.x, m.point.y, m.point.z);
         this.markers.add(sphere);
+        // The finger's number just above its point
+        const tag = labelSprite(String(i + 1), POINT_COLORS[i], radius * 3.2, true);
+        tag.position.set(m.point.x, m.point.y, m.point.z + radius * 3);
+        this.markers.add(tag);
       });
       if (cue?.geometry) this.markers.add(this.buildGripCue(cue, radius));
       else if (cue) this.markers.add(this.buildNoGripBar(points, radius));
@@ -139,8 +178,9 @@ export class AutoPickPreview {
     this.group.matrix.copy(this.frame);
     this.group.matrixWorldNeedsUpdate = true;
 
-    // The teaching view stays clean: only the part, the gripper and the marked points (no table, tray or path).
-    // Sim / Real Sim show the whole cell in the live view.
+    // The planned path (dashed blue) and where the part goes (dashed green "Place here").
+    this.drawPath(plan);
+    this.drawPlaceTarget(doc, partRoot);
 
     // Region for the camera: the table is far larger than the motion, so frame the motion and the part.
     this.group.updateMatrixWorld(true);
@@ -153,6 +193,64 @@ export class AutoPickPreview {
     }
     this.requestRender();
     return box;
+  }
+
+  /** Dashed blue line through every planned gripper position (part frame, mm). */
+  private drawPath(plan: GraspPlan) {
+    const pts: THREE.Vector3[] = [];
+    for (const phase of plan.phases) for (const p of phase.tcp) pts.push(new THREE.Vector3(p.position.x, p.position.y, p.position.z));
+    if (pts.length < 2) return;
+    const line = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineDashedMaterial({ color: PATH_COLOR, dashSize: 8, gapSize: 6, depthTest: false, transparent: true, opacity: 0.9 })
+    );
+    line.computeLineDistances();
+    line.renderOrder = 8;
+    line.name = 'planned_path';
+    this.group.add(line);
+  }
+
+  /** Dashed green outline of the bin at the drop point, labelled "Place here". */
+  private drawPlaceTarget(doc: PlanDocument, partRoot: THREE.Object3D) {
+    const w = doc.world_in_part;
+    if (!w || !doc.scene?.placeXY) return;
+    // world (mm) -> part frame (mm): the group is in the part frame
+    const W = new THREE.Matrix4().compose(
+      new THREE.Vector3(w.position.x, w.position.y, w.position.z),
+      new THREE.Quaternion(w.orientation.x, w.orientation.y, w.orientation.z, w.orientation.w),
+      new THREE.Vector3(1, 1, 1)
+    );
+    const [px, py] = doc.scene.placeXY;
+    const table = doc.scene.boxes.find((b) => b.name === 'table_top');
+    const tableTop = table ? table.pos[2] + table.halfSize[2] : 0;
+    // The bin: the boxes near the drop point (walls and floor); else a square the part's size
+    const bin = doc.scene.boxes.filter((b) => b.name.startsWith('box_') && Math.hypot(b.pos[0] - px, b.pos[1] - py) < 400);
+    let x0: number, x1: number, y0: number, y1: number, z: number;
+    if (bin.length) {
+      x0 = Math.min(...bin.map((b) => b.pos[0] - b.halfSize[0]));
+      x1 = Math.max(...bin.map((b) => b.pos[0] + b.halfSize[0]));
+      y0 = Math.min(...bin.map((b) => b.pos[1] - b.halfSize[1]));
+      y1 = Math.max(...bin.map((b) => b.pos[1] + b.halfSize[1]));
+      z = Math.max(...bin.map((b) => b.pos[2] + b.halfSize[2])) + 1;
+    } else {
+      const size = new THREE.Box3().setFromObject(partRoot).getSize(new THREE.Vector3());
+      const h = 0.7 * Math.max(size.x, size.y, 40);
+      [x0, x1, y0, y1, z] = [px - h, px + h, py - h, py + h, tableTop + 1];
+    }
+    const corners = [
+      [x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]
+    ].map(([x, y]) => new THREE.Vector3(x, y, z).applyMatrix4(W));
+    const outline = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(corners),
+      new THREE.LineDashedMaterial({ color: PLACE_COLOR, dashSize: 12, gapSize: 8, depthTest: false, transparent: true })
+    );
+    outline.computeLineDistances();
+    outline.renderOrder = 8;
+    outline.name = 'place_target';
+    this.group.add(outline);
+    const label = labelSprite('Place here', '#16a34a', 18);
+    label.position.copy(new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2, z + 30).applyMatrix4(W));
+    this.group.add(label);
   }
 
   /** Plays the motion once; onDone runs after the gripper and part are back where they were. */
@@ -262,11 +360,7 @@ export class AutoPickPreview {
   }
 
   private clearDrawing() {
-    this.group.traverse((obj) => {
-      const item = obj as THREE.Mesh;
-      item.geometry?.dispose();
-      (item.material as THREE.Material | undefined)?.dispose?.();
-    });
+    disposeTree(this.group);
     this.group.clear();
   }
 }
